@@ -1,6 +1,6 @@
 # Starlight
 
-[EN](AI-Chat\README_EN.md)
+[EN](README_EN.md)
 
 **个人自托管轻量级多模型 AI 聊天应用**
 
