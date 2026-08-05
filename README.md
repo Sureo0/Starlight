@@ -2,12 +2,12 @@
 
 [EN](README_EN.md)
 
-**个人自托管轻量级多模型 AI Agent**
+**个人自托管轻量级多模型 AI Agent 应用**
 
 [![Python](https://img.shields.io/badge/Python-3.10+-yellow.svg)](https://www.python.org/downloads/)
 [![Flask](https://img.shields.io/badge/Flask-3.x-blue.svg)](https://flask.palletsprojects.com/)
 
-**Starlight** 是一款功能完整、易于部署的个人 AI Agent。它通过统一的 OpenAI 兼容 API 接入主流大语言模型（LLM），并内置了强大的 **Agent 系统**、**长期记忆**与**文件夹挂载**能力，可实现复杂的任务规划与执行。
+**Starlight** 是一款功能完整、易于部署的个人 AI 助手。它通过统一的 OpenAI 兼容 API 接入主流大语言模型（LLM），并内置了强大的 **Agent 系统**、**长期记忆**与**文件夹挂载**能力，可实现复杂的任务规划与执行。
 
 ## ✨ 核心亮点
 
