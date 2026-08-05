@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Starlight</title>
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
+    <link rel="apple-touch-icon" href="/static/img/icon-512.png">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Backdrop: fades in from the center as the mouse moves away from the
+         vertical center. Sits BELOW all functional UI (pointer-events: none). -->
+    <div class="backdrop" id="backdrop" aria-hidden="true"></div>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-top">
+                <div class="sidebar-title">✦ Starlight</div>
+                <div class="sidebar-actions">
+                    <button class="btn-nav" id="btnNewChat" title="New Chat">+ New Chat</button>
+                    <a class="btn-nav" href="/scheduled" style="text-decoration:none;">定时任务</a>
+                    <button class="btn-nav" id="btnMemory" title="Long-term memory">Memory</button>
+                </div>
+            </div>
+            <div class="chat-section" id="chatSection">
+                <div class="chat-section-header" id="chatSectionHeader">
+                    <button class="btn-chat-toggle" id="btnChatToggle" title="展开/收起会话记录">
+                        <span class="chat-section-title">Chat</span>
+                        <span class="btn-chat-collapse">></span>
+                    </button>
+                </div>
+                <div class="chat-list" id="chatList"></div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="user-menu" id="userMenu">
+                    <button class="btn-user" id="btnUser">
+                        <span class="user-avatar" id="userAvatar">?</span>
+                        <span class="user-name" id="userName">Login</span>
+                    </button>
+                    <div class="user-dropdown" id="userDropdown">
+                        <div class="dropdown-header" id="dropdownHeader">Not logged in</div>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item" id="btnDropdownLogin">Login</button>
+                        <button class="dropdown-item" id="btnDropdownChangePw">Change Password</button>
+                        <button class="dropdown-item dropdown-danger" id="btnDropdownLogout">Logout</button>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main -->
+        <main class="main">
+            <header class="chat-header">
+                <button class="btn-toggle-sidebar" id="btnToggleSidebar">&#9776;</button>
+                <h2 id="chatTitle">New Chat</h2>
+            </header>
+
+            <div class="conv-files" id="convFiles" style="display:none;"></div>
+
+            <div class="messages" id="messages">
+                <div class="welcome" id="welcome">
+                    <h2>Hello!</h2>
+                    <p>I'm your AI assistant. How can I help you today?</p>
+                    <div class="suggestions">
+                        <button class="chip" onclick="sendSuggestion('Explain quantum computing')">Explain quantum computing</button>
+                        <button class="chip" onclick="sendSuggestion('Write a Python quicksort')">Write a Python quicksort</button>
+                        <button class="chip" onclick="sendSuggestion('Recommend a book')">Recommend a book</button>
+                        <button class="chip" onclick="sendSuggestion('What is the meaning of life?')">What is the meaning of life?</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-area" id="inputArea">
+                <div class="attach-bar" id="attachBar" style="display:none;"></div>
+                <div class="input-box">
+                    <button class="btn-attach" id="btnAttach" title="上传文件 / 图片">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                        </svg>
+                    </button>
+                    <button class="btn-attach" id="btnFolder" title="挂载文件夹（输入本地路径）">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                    </button>
+                    <input type="file" id="fileInput" multiple style="display:none;">
+                    <textarea id="msgInput" placeholder="Type your message... 或拖入文件/图片" rows="1"></textarea>
+                    <button class="btn-send" id="btnSend" title="Send">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13"/>
+                        </svg>
+                    </button>
+                    <button class="btn-send btn-cancel" id="btnCancel" title="停止生成" style="display:none;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Traces panel (right, always visible) -->
+        <aside class="traces-panel" id="tracesPanel">
+            <div class="traces-panel-header">
+                <span>Traces</span>
+                <button class="btn-panel-close" id="btnCloseTraces" title="隐藏">×</button>
+            </div>
+            <iframe id="tracesFrame" src="/traces?embed=1" frameborder="0"></iframe>
+        </aside>
+
+        <!-- Gear button (bottom-right) -->
+        <div class="gear-fab" id="gearFab" title="更多">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+        </div>
+        <div class="gear-menu" id="gearMenu">
+            <button class="gear-menu-item" id="btnGearTraces">
+                <span>📜</span> Traces
+            </button>
+            <button class="gear-menu-item" id="btnGearSettings">
+                <span>⚙️</span> Settings
+            </button>
+            <button class="gear-menu-item" id="btnGearMonitor">
+                <span>📊</span> Monitor
+            </button>
+        </div>
+    </div>
+
+    <!-- Approval (human-in-the-loop) notifications -->
+    <div class="approval-stack" id="approvalStack"></div>
+
+    <!-- Login Modal -->
+    <div class="modal-overlay" id="loginModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Login</h3>
+                <button class="btn-close" id="btnCloseLogin">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="loginError" class="form-error" style="display:none"></div>
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="loginUsername" autocomplete="username" placeholder="Enter username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Enter password">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" id="btnCancelLogin">Cancel</button>
+                <button class="btn-save" id="btnDoLogin">Login</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div class="modal-overlay" id="pwModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Change Password</h3>
+                <button class="btn-close" id="btnClosePw">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Current Password</label>
+                    <input type="password" id="pwCurrent" placeholder="Enter current password">
+                </div>
+                <div class="form-group">
+                    <label>New Password</label>
+                    <input type="password" id="pwNew" placeholder="Min 8 chars, mixed case + number">
+                </div>
+                <div class="form-group">
+                    <label>Confirm New Password</label>
+                    <input type="password" id="pwConfirm" placeholder="Confirm new password">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" id="btnCancelPw">Cancel</button>
+                <button class="btn-save" id="btnDoChangePw">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Monitor Modal -->
+    <div class="modal-overlay" id="monitorModal">
+        <div class="modal modal-wide">
+            <div class="modal-header">
+                <h3>System Monitor</h3>
+                <button class="btn-close" id="btnCloseMonitor">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- System Resources -->
+                <h4 class="section-heading">System Resources</h4>
+                <div class="resources-grid" id="resourcesGrid">
+                    <div class="resource-item">
+                        <div class="resource-header">
+                            <span class="resource-label">CPU</span>
+                            <span class="resource-value" id="resCpu">-</span>
+                        </div>
+                        <div class="resource-bar"><div class="resource-fill" id="resCpuBar"></div></div>
+                    </div>
+                    <div class="resource-item">
+                        <div class="resource-header">
+                            <span class="resource-label">Memory</span>
+                            <span class="resource-value" id="resMem">-</span>
+                        </div>
+                        <div class="resource-bar"><div class="resource-fill" id="resMemBar"></div></div>
+                    </div>
+                    <div class="resource-item">
+                        <div class="resource-header">
+                            <span class="resource-label">Disk</span>
+                            <span class="resource-value" id="resDisk">-</span>
+                        </div>
+                        <div class="resource-bar"><div class="resource-fill" id="resDiskBar"></div></div>
+                    </div>
+                </div>
+
+                <div class="section-divider"></div>
+
+                <!-- Alert Status -->
+                <h4 class="section-heading">
+                    Alert Status
+                    <button class="btn-sm btn-check" id="btnRunCheck" title="Run check now">Check Now</button>
+                </h4>
+                <div class="alert-rules" id="alertRules"></div>
+
+                <div class="section-divider"></div>
+                <h4 class="section-heading">Recent Alerts</h4>
+                <div class="alert-history" id="alertHistory">No alerts</div>
+
+                <div class="section-divider"></div>
+
+                <!-- App Stats -->
+                <h4 class="section-heading">Application Stats</h4>
+                <div class="stats-grid" id="statsGrid">
+                    <div class="stat-card">
+                        <div class="stat-label">Uptime</div>
+                        <div class="stat-value" id="statUptime">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Requests</div>
+                        <div class="stat-value" id="statRequests">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Error Rate</div>
+                        <div class="stat-value" id="statErrors">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">LLM Calls</div>
+                        <div class="stat-value" id="statLlmCalls">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Tokens</div>
+                        <div class="stat-value" id="statTokens">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Avg LLM Latency</div>
+                        <div class="stat-value" id="statLatency">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Conversations</div>
+                        <div class="stat-value" id="statConvs">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Users</div>
+                        <div class="stat-value" id="statUsers">-</div>
+                    </div>
+                </div>
+
+                <div class="section-divider"></div>
+                <h4 class="section-heading">LLM Calls by Model</h4>
+                <div id="modelStats" class="model-stats"></div>
+
+                <div class="section-divider"></div>
+                <h4 class="section-heading">Top Request Paths</h4>
+                <div id="pathStats" class="path-stats"></div>
+
+                <div class="section-divider"></div>
+                <h4 class="section-heading">Recent Logs</h4>
+                <div class="log-viewer" id="logViewer">Loading...</div>
+
+                <div class="section-divider"></div>
+                <h4 class="section-heading">Log Files</h4>
+                <div id="logFiles" class="log-files"></div>
+
+                <div class="section-divider"></div>
+                <h4 class="section-heading">
+                    MCP Servers
+                    <button class="btn-sm btn-check" id="btnMcpReload" title="Reload MCP servers from config.yaml">Reload</button>
+                </h4>
+                <div id="mcpStatus" class="mcp-status">Loading...</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" id="btnCloseMonitor2">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Settings</h3>
+                <button class="btn-close" id="btnCloseSettings">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>模型预设（选择后自动填充，可再手动修改）</label>
+                    <select id="cfgPreset">
+                        <option value="">自定义 / 不适用预设</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>LLM Backend Name</label>
+                    <input type="text" id="cfgName" placeholder="DeepSeek" value="DeepSeek">
+                </div>
+                <div class="form-group">
+                    <label>API Base URL</label>
+                    <input type="text" id="cfgApiBase" placeholder="https://api.deepseek.com/v1">
+                </div>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input type="password" id="cfgApiKey" placeholder="sk-...">
+                </div>
+                <div class="form-group">
+                    <label>Model</label>
+                    <input type="text" id="cfgModel" placeholder="deepseek-chat">
+                </div>
+                <div class="form-group">
+                    <label>System Prompt</label>
+                    <textarea id="cfgSystemPrompt" rows="3" placeholder="You are a helpful AI assistant."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group half">
+                        <label>Temperature</label>
+                        <input type="number" id="cfgTemperature" value="0.7" min="0" max="2" step="0.1">
+                    </div>
+                    <div class="form-group half">
+                        <label>Max Tokens</label>
+                        <input type="number" id="cfgMaxTokens" value="2048" min="100" max="32000">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" id="btnCancelSettings">Cancel</button>
+                <button class="btn-save" id="btnSaveSettings">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Memory Modal -->
+    <div class="modal-overlay" id="memoryModal">
+        <div class="modal modal-wide">
+            <div class="modal-header">
+                <h3>Long-term Memory</h3>
+                <button class="btn-close" id="btnCloseMemory">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="memory-toolbar">
+                    <div class="memory-search">
+                        <input type="text" id="memSearch" placeholder="Search memories...">
+                        <button class="btn-save" id="btnMemSearch">Search</button>
+                    </div>
+                    <select id="memTypeFilter">
+                        <option value="">All types</option>
+                        <option value="fact">Fact</option>
+                        <option value="preference">Preference</option>
+                        <option value="task">Task</option>
+                    </select>
+                    <button class="btn-cancel" id="btnMemReset">Reset</button>
+                </div>
+
+                <div class="memory-add">
+                    <input type="text" id="memNewContent" placeholder="New memory (e.g. 用户喜欢喝绿茶)">
+                    <select id="memNewType">
+                        <option value="fact">Fact</option>
+                        <option value="preference">Preference</option>
+                        <option value="task">Task</option>
+                    </select>
+                    <select id="memNewImportance">
+                        <option value="3">★★★</option>
+                        <option value="4">★★★★</option>
+                        <option value="5">★★★★★</option>
+                        <option value="2">★★</option>
+                        <option value="1">★</option>
+                    </select>
+                    <button class="btn-save" id="btnMemAdd">Add</button>
+                </div>
+
+                <div class="memory-list" id="memoryList">
+                    <div class="memory-empty">No memories yet. Chat with the assistant to build long-term memory.</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span class="memory-count" id="memCount"></span>
+                <button class="btn-cancel" id="btnCloseMemory2">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mount Folder Modal (挂载文件夹) -->
+    <div class="modal-overlay" id="mountModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>挂载本地文件夹</h3>
+                <button class="btn-close" id="btnCloseMount">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="mount-hint">
+                    输入要挂载的文件夹绝对路径（如 <code>D:\projects\myapp</code> 或 <code>/home/user/data</code>）。
+                </p>
+                <input type="text" id="mountPath" placeholder="例如 D:\projects\myapp 或 /home/user/data"
+                       style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px;">
+                <div class="mount-list" id="mountList" style="margin-top:12px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" id="btnCancelMount">取消</button>
+                <button class="btn-save" id="btnDoMount">挂载</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mount Confirm Modal (确认挂载访问策略) -->
+    <div class="modal-overlay" id="mountConfirmModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>确认挂载访问权限</h3>
+                <button class="btn-close" id="btnCloseMountConfirm">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>是否允许 Agent 读取或更改以下文件夹内的文件？</p>
+                <div style="margin:10px 0; padding:10px; background:rgba(99,102,241,0.06); border:1px solid var(--border); border-radius:8px; word-break:break-all;">
+                    <span style="font-weight:600;">📁 <span id="mountConfirmName"></span></span><br>
+                    <span id="mountConfirmPath" style="color:#64748b; font-size:0.85rem;"></span>
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content:space-between;">
+                <button class="btn-cancel" id="btnMountConfirmCancel">取消</button>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn-cancel" id="btnMountConfirmAlwaysAsk">总是询问</button>
+                    <button class="btn-save" id="btnMountConfirmAllow">允许</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=20260803b"></script>
+</body>
+</html>

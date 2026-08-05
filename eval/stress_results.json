@@ -1,0 +1,97 @@
+{
+ "mcp_add": {
+  "passed": true,
+  "duration": 29.0,
+  "tool_calls": 1,
+  "iterations": 2,
+  "answer": "使用 MCP 工具 `mock__add` 计算 3 + 5，结果为 **8**。",
+  "reason": "8 in answer"
+ },
+ "memory_recall": {
+  "passed": true,
+  "stored": 1,
+  "answer": "你的幸运数字是 42。",
+  "reason": "'42' in answer"
+ },
+ "stable_plan_multi": {
+  "passed": true,
+  "pass_rate": "3/3",
+  "runs": [
+   {
+    "run": 1,
+    "passed": true,
+    "duration": 35.58,
+    "tool_calls": 4,
+    "reason": "deterministic check passed"
+   },
+   {
+    "run": 2,
+    "passed": true,
+    "duration": 24.18,
+    "tool_calls": 4,
+    "reason": "deterministic check passed"
+   },
+   {
+    "run": 3,
+    "passed": true,
+    "duration": 26.11,
+    "tool_calls": 5,
+    "reason": "deterministic check passed"
+   }
+  ]
+ },
+ "stable_hard_debug": {
+  "passed": true,
+  "pass_rate": "3/3",
+  "runs": [
+   {
+    "run": 1,
+    "passed": true,
+    "duration": 18.22,
+    "tool_calls": 3,
+    "reason": "deterministic check passed"
+   },
+   {
+    "run": 2,
+    "passed": true,
+    "duration": 24.65,
+    "tool_calls": 3,
+    "reason": "deterministic check passed"
+   },
+   {
+    "run": 3,
+    "passed": true,
+    "duration": 16.94,
+    "tool_calls": 5,
+    "reason": "deterministic check passed"
+   }
+  ]
+ },
+ "stable_web_fib_formula": {
+  "passed": true,
+  "pass_rate": "3/3",
+  "runs": [
+   {
+    "run": 1,
+    "passed": true,
+    "duration": 12.34,
+    "tool_calls": 2,
+    "reason": "deterministic check passed"
+   },
+   {
+    "run": 2,
+    "passed": true,
+    "duration": 10.5,
+    "tool_calls": 2,
+    "reason": "deterministic check passed"
+   },
+   {
+    "run": 3,
+    "passed": true,
+    "duration": 11.52,
+    "tool_calls": 2,
+    "reason": "deterministic check passed"
+   }
+  ]
+ }
+}

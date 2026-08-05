@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>定时任务 - Starlight</title>
+    <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { margin: 0; font-family: var(--font, system-ui, sans-serif); background: var(--bg); color: var(--text); }
+        .page { max-width: 1080px; margin: 0 auto; padding: 24px 20px 60px; }
+        .page-header { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+        .page-header h1 { font-size: 1.3rem; margin: 0; }
+        .page-header .back { color: var(--text-secondary); text-decoration: none; font-size: 0.85rem; }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+        .card h2 { font-size: 0.95rem; margin: 0 0 12px; }
+        .row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .row > * { flex: 1; min-width: 160px; }
+        input[type=text], textarea, select {
+            width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 0.85rem;
+            border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text);
+        }
+        textarea { min-height: 64px; resize: vertical; }
+        label { display: block; font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px; }
+        .hint { font-size: 0.72rem; color: var(--text-secondary); margin-top: 4px; }
+        .btn { padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem;
+            background: var(--primary, #4f46e5); color: #fff; }
+        .btn:hover { opacity: 0.9; }
+        .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
+        .btn-danger { background: #dc2626; }
+        .btn-sm { padding: 4px 10px; font-size: 0.75rem; border-radius: 6px; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        th { color: var(--text-secondary); font-weight: 600; font-size: 0.75rem; }
+        .badge { font-size: 0.68rem; padding: 2px 8px; border-radius: 9px; font-weight: 600; display: inline-block; }
+        .badge-on { background: #dcfce7; color: #15803d; }
+        .badge-off { background: #e5e7eb; color: #4b5563; }
+        .badge-ok { background: #dcfce7; color: #15803d; }
+        .badge-fail { background: #fee2e2; color: #b91c1c; }
+        .badge-skip { background: #fef3c7; color: #b45309; }
+        .badge-run { background: #dbeafe; color: #1d4ed8; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
+        .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+        .muted { color: var(--text-secondary); }
+        .run-content { white-space: pre-wrap; max-width: 560px; max-height: 140px; overflow-y: auto;
+            font-size: 0.75rem; background: var(--bg); border-radius: 6px; padding: 6px 8px; }
+        .toggle { cursor: pointer; }
+        .empty { padding: 24px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; }
+        .flash-error { background: #fee2e2; color: #b91c1c; padding: 8px 12px; border-radius: 8px;
+            font-size: 0.8rem; margin-bottom: 12px; display: none; }
+        .refresh { margin-left: auto; }
+    </style>
+</head>
+<body>
+<div class="page">
+    <div class="page-header">
+        <a class="back" href="/">← 返回聊天</a>
+        <h1>⏰ 定时任务</h1>
+        <button class="btn btn-ghost btn-sm refresh" onclick="loadAll()">刷新</button>
+    </div>
+
+    <div class="flash-error" id="flash"></div>
+
+    <!-- 新建任务 -->
+    <div class="card">
+        <h2>新建定时任务</h2>
+        <div class="row" style="margin-bottom:10px;">
+            <div><label>任务名称</label><input type="text" id="f-name" placeholder="如：每日早报"></div>
+            <div><label>Cron 表达式</label><input type="text" id="f-schedule" placeholder="如：0 9 * * *" class="mono"></div>
+            <div style="max-width:200px;"><label>状态</label>
+                <select id="f-enabled"><option value="1">启用</option><option value="0">停用</option></select>
+            </div>
+        </div>
+        <div style="margin-bottom:10px;">
+            <label>任务提示词（发给 Agent 的指令）</label>
+            <textarea id="f-prompt" placeholder="如：帮我整理昨天的 git 提交记录，并总结今天要关注的事项"></textarea>
+        </div>
+        <div class="row">
+            <div class="hint" style="flex:2;">cron 5 段：分 时 日 月 周。示例：<span class="mono">0 9 * * *</span> 每天 09:00、<span class="mono">*/30 * * * *</span> 每 30 分钟、<span class="mono">0 8 * * 1-5</span> 工作日 08:00</div>
+            <div style="flex:1; text-align:right;">
+                <button class="btn" id="btn-create" onclick="createTask()">创建任务</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 任务列表 -->
+    <div class="card">
+        <h2>任务列表</h2>
+        <div id="task-list"><div class="empty">加载中…</div></div>
+    </div>
+
+    <!-- 执行历史 -->
+    <div class="card">
+        <h2>执行历史</h2>
+        <div id="run-history"><div class="empty">加载中…</div></div>
+    </div>
+</div>
+
+<script>
+var CSRF = document.querySelector('meta[name="csrf-token"]').content;
+
+function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function flash(msg) {
+    var el = document.getElementById('flash');
+    el.textContent = msg;
+    el.style.display = msg ? 'block' : 'none';
+    if (msg) setTimeout(function () { el.style.display = 'none'; }, 6000);
+}
+function fmtTime(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString('zh-CN', { hour12: false });
+}
+function fmtDur(ms) {
+    if (ms == null) return '—';
+    if (ms < 1000) return ms + ' ms';
+    return (ms / 1000).toFixed(1) + ' s';
+}
+function statusBadge(status) {
+    var map = { success: ['badge-ok', '✓ 成功'], failed: ['badge-fail', '✗ 失败'],
+        skipped: ['badge-skip', '跳过'], running: ['badge-run', '执行中'], pending: ['badge-run', '等待'] };
+    var m = map[status] || ['badge-off', status];
+    return '<span class="badge ' + m[0] + '">' + m[1] + '</span>';
+}
+
+async function api(path, method, body) {
+    var opt = { method: method, headers: {} };
+    if (body !== undefined) {
+        opt.headers['Content-Type'] = 'application/json';
+        opt.body = JSON.stringify(body);
+    }
+    var r = await fetch(path, opt);
+    var data = await r.json().catch(function () { return {}; });
+    if (!r.ok) throw new Error(data.error || data.message || ('HTTP ' + r.status));
+    return data;
+}
+
+// ---------- tasks ----------
+async function loadTasks() {
+    try {
+        var data = await api('/api/scheduled/tasks', 'GET');
+        renderTasks(data.tasks || []);
+    } catch (e) { flash('加载任务失败: ' + e.message); }
+}
+
+function renderTasks(tasks) {
+    var el = document.getElementById('task-list');
+    if (!tasks.length) { el.innerHTML = '<div class="empty">还没有定时任务，先在上方创建一个。</div>'; return; }
+    var html = '<table><thead><tr><th>名称</th><th>提示词</th><th>Cron</th><th>下次执行</th><th>上次执行</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+    tasks.forEach(function (t) {
+        html += '<tr>' +
+            '<td><b>' + esc(t.name) + '</b></td>' +
+            '<td><div class="run-content">' + esc(t.prompt) + '</div></td>' +
+            '<td class="mono">' + esc(t.schedule) + '</td>' +
+            '<td class="muted" style="font-size:0.72rem;">' + fmtTime(t.next_run_at) + '</td>' +
+            '<td class="muted" style="font-size:0.72rem;">' + fmtTime(t.last_run_at) + '</td>' +
+            '<td><span class="badge ' + (t.enabled ? 'badge-on' : 'badge-off') + '">' +
+                (t.enabled ? '启用' : '停用') + '</span></td>' +
+            '<td><div class="actions">' +
+                '<button class="btn btn-sm" onclick="runNow(' + t.id + ')">立即执行</button>' +
+                '<button class="btn btn-sm btn-ghost" onclick="toggleTask(' + t.id + ', ' + (t.enabled ? 0 : 1) + ')">' +
+                    (t.enabled ? '停用' : '启用') + '</button>' +
+                '<button class="btn btn-sm btn-ghost" onclick="editTask(' + t.id + ')">编辑</button>' +
+                '<button class="btn btn-sm btn-danger" onclick="deleteTask(' + t.id + ')">删除</button>' +
+            '</div></td></tr>';
+    });
+    el.innerHTML = html + '</tbody></table>';
+}
+
+async function createTask() {
+    var name = document.getElementById('f-name').value.trim();
+    var prompt = document.getElementById('f-prompt').value.trim();
+    var schedule = document.getElementById('f-schedule').value.trim();
+    var enabled = document.getElementById('f-enabled').value === '1';
+    if (!name || !prompt || !schedule) { flash('请填写名称、提示词和 cron 表达式'); return; }
+    var btn = document.getElementById('btn-create');
+    btn.disabled = true;
+    try {
+        await api('/api/scheduled/tasks', 'POST', { name: name, prompt: prompt, schedule: schedule, enabled: enabled });
+        document.getElementById('f-name').value = '';
+        document.getElementById('f-prompt').value = '';
+        document.getElementById('f-schedule').value = '';
+        flash('任务已创建');
+        loadAll();
+    } catch (e) { flash('创建失败: ' + e.message); }
+    finally { btn.disabled = false; }
+}
+
+async function toggleTask(id, enabled) {
+    try { await api('/api/scheduled/tasks/' + id, 'PUT', { enabled: !!enabled }); loadAll(); }
+    catch (e) { flash(e.message); }
+}
+
+async function deleteTask(id) {
+    if (!confirm('确定删除该定时任务？')) return;
+    try { await api('/api/scheduled/tasks/' + id, 'DELETE'); loadAll(); }
+    catch (e) { flash(e.message); }
+}
+
+async function runNow(id) {
+    if (!confirm('立即执行该任务？（若当前有对话在运行会跳过）')) return;
+    try {
+        var data = await api('/api/scheduled/tasks/' + id + '/run', 'POST');
+        if (data.ok) flash('已触发执行，结果见执行历史');
+        else flash(data.message || '执行失败');
+        loadAll();
+    } catch (e) { flash('触发失败: ' + e.message); loadAll(); }
+}
+
+function editTask(id) {
+    var name = prompt('新任务名称：');
+    if (name === null) return;
+    var schedule = prompt('新 cron 表达式：');
+    if (schedule === null) return;
+    api('/api/scheduled/tasks/' + id, 'PUT', { name: name.trim(), schedule: schedule.trim() })
+        .then(loadAll).catch(function (e) { flash(e.message); });
+}
+
+// ---------- run history ----------
+async function loadRuns() {
+    try {
+        var data = await api('/api/scheduled/runs', 'GET');
+        renderRuns(data.runs || []);
+    } catch (e) { flash('加载历史失败: ' + e.message); }
+}
+
+function renderRuns(runs) {
+    var el = document.getElementById('run-history');
+    if (!runs.length) { el.innerHTML = '<div class="empty">暂无执行记录。</div>'; return; }
+    var html = '<table><thead><tr><th>任务</th><th>状态</th><th>开始时间</th><th>耗时</th><th>结果 / 错误</th></tr></thead><tbody>';
+    runs.forEach(function (r) {
+        var body = '';
+        if (r.error) body += '<div class="err-text" style="font-size:0.72rem;">' + esc(r.error) + '</div>';
+        if (r.content) body += '<div class="run-content">' + esc(r.content) + '</div>';
+        var trace = r.trace_id
+            ? ' <a href="/traces?trace=' + esc(r.trace_id) + '" style="font-size:0.7rem; color:var(--primary);">回放 ↗</a>'
+            : '';
+        html += '<tr><td><b>' + esc(r.task_name || ('#' + r.task_id)) + '</b>' + trace + '</td>' +
+            '<td>' + statusBadge(r.status) + '</td>' +
+            '<td class="muted" style="font-size:0.72rem;">' + fmtTime(r.started_at) + '</td>' +
+            '<td class="muted">' + fmtDur(r.duration_ms) + '</td>' +
+            '<td>' + (body || '<span class="muted">—</span>') + '</td></tr>';
+    });
+    el.innerHTML = html + '</tbody></table>';
+}
+
+function loadAll() { loadTasks(); loadRuns(); }
+loadAll();
+// 每 15 秒自动刷新一次（执行中的任务状态会更新）
+setInterval(loadRuns, 15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Starlight - 运行回放</title>
+    <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .traces-layout { display: flex; height: 100vh; }
+        .traces-sidebar {
+            width: 300px; background: var(--surface); border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; flex-shrink: 0;
+        }
+        .traces-sidebar-header { padding: 16px 16px 8px; }
+        .traces-sidebar-header h1 { font-size: 1.1rem; margin-bottom: 10px; }
+        .trace-filters { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+        .trace-filters button {
+            padding: 4px 10px; font-size: 0.75rem; border: 1px solid var(--border);
+            background: var(--surface); border-radius: 12px; cursor: pointer; color: var(--text-secondary);
+        }
+        .trace-filters button.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+        .trace-list { flex: 1; overflow-y: auto; padding: 4px 8px 12px; }
+        .trace-item {
+            padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 4px;
+            border: 1px solid transparent;
+        }
+        .trace-item:hover { background: var(--bg); }
+        .trace-item.active { background: var(--msg-ai); border-color: var(--primary); }
+        .trace-item-title { font-size: 0.82rem; font-weight: 600; margin-bottom: 4px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .trace-item-meta { font-size: 0.72rem; color: var(--text-secondary);
+            display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .badge { font-size: 0.68rem; padding: 1px 7px; border-radius: 9px; font-weight: 600; }
+        .badge-ok { background: #dcfce7; color: #15803d; }
+        .badge-fail { background: #fee2e2; color: #b91c1c; }
+        .badge-warn { background: #fef3c7; color: #b45309; }
+        .trace-empty { padding: 30px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; }
+        .trace-main { flex: 1; display: flex; flex-direction: column; background: var(--bg); min-width: 0; }
+        .trace-detail-header { padding: 16px 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+        .trace-detail-header h2 { font-size: 1rem; margin-bottom: 8px; }
+        .trace-stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.78rem; color: var(--text-secondary); }
+        .trace-stats b { color: var(--text); font-weight: 600; }
+        .trace-scroll { flex: 1; overflow-y: auto; padding: 20px 24px; }
+        .event { border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+            margin-bottom: 12px; overflow: hidden; }
+        .event-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+            font-size: 0.78rem; font-weight: 600; border-bottom: 1px solid var(--border); }
+        .event-head .ev-time { color: var(--text-secondary); font-weight: 400; margin-left: auto; }
+        .event-body { padding: 10px 14px; font-size: 0.8rem; overflow-x: auto; }
+        .event-body pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.75rem; background: #f4f2fd; color: #2d2a4a; padding: 10px; border-radius: 6px;
+            overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+        .ev-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .ev-llm_call { background: #f5c542; }
+        .ev-tool_call { background: #38bdf8; }
+        .ev-tool_result { background: #34d399; }
+        .ev-plan { background: #a78bfa; }
+        .ev-plan_progress { background: #c4b5fd; }
+        .ev-plan_review { background: #ddd6fe; }
+        .ev-memory_inject, .ev-memory_extract { background: #2dd4bf; }
+        .ev-compression { background: #5eead4; }
+        .ev-subagent { background: #f472b6; }
+        .ev-security { background: #f59e0b; }
+        .ev-approval { background: #fb923c; }
+        .ev-loop_guard { background: #f87171; }
+        .ev-error { background: #f87171; }
+        .ev-info { background: #94a3b8; }
+        .ev-msg { color: var(--text-secondary); }
+        .arg-key { color: #93c5fd; }
+        .ev-collapsed { cursor: pointer; }
+        .ev-collapsed .ev-body { display: none; }
+        .ev-collapsed .ev-head::after { content: "▸"; margin-left: auto; }
+        .tool-row { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; padding: 2px 0; }
+        .tool-name { font-weight: 600; }
+        .ok-text { color: #15803d; }
+        .err-text { color: #b91c1c; }
+        .trace-user-msg { background: var(--msg-user); color: #fff; border-radius: 12px;
+            padding: 10px 14px; font-size: 0.85rem; margin-bottom: 12px; white-space: pre-wrap; }
+        .trace-final { background: var(--msg-ai); border-radius: 12px; padding: 10px 14px;
+            font-size: 0.85rem; margin-top: 4px; white-space: pre-wrap; }
+        .back-link { display: inline-block; margin-bottom: 10px; font-size: 0.8rem;
+            color: var(--primary); text-decoration: none; }
+        .back-link:hover { text-decoration: underline; }
+        .detail-meta { font-size: 0.75rem; color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
+        .delete-btn { margin-left: auto; font-size: 0.75rem; color: #b91c1c; background: none;
+            border: 1px solid #fecaca; border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+        .delete-btn:hover { background: #fee2e2; }
+        .refresh-btn { padding: 4px 10px; font-size: 0.75rem; border: 1px solid var(--border);
+            background: var(--surface); border-radius: 12px; cursor: pointer; color: var(--text-secondary); }
+        .refresh-btn:hover { background: var(--bg); }
+        @media (max-width: 800px) {
+            .traces-sidebar { display: none; }
+        }
+        /* Embedded mode (the right-hand Traces panel in the chat UI, ~340px
+           wide): the list shows only ~3 items, the rest of the space goes to
+           the detail pane. */
+        body.embed .traces-layout { flex-direction: column; }
+        body.embed .traces-sidebar {
+            width: 100%; display: flex; flex-direction: column;
+            border-right: none; border-bottom: 1px solid var(--border);
+            max-height: 132px;  /* ~3 trace items */
+            flex-shrink: 0;
+        }
+        body.embed .traces-sidebar-header { padding: 8px 12px 4px; }
+        body.embed .traces-sidebar-header h1 { font-size: 0.85rem; margin-bottom: 4px; }
+        body.embed .trace-filters { margin-bottom: 4px; gap: 4px; }
+        body.embed .trace-filters button { padding: 2px 8px; font-size: 0.7rem; }
+        body.embed .trace-list { max-height: none; overflow-y: auto; padding: 2px 8px 6px; }
+        body.embed .trace-item { padding: 6px 10px; margin-bottom: 2px; }
+        body.embed .trace-item-title { font-size: 0.75rem; margin-bottom: 2px; }
+        body.embed .trace-item-meta { font-size: 0.65rem; gap: 5px; }
+        body.embed .trace-main { flex: 1; min-height: 0; }
+        body.embed .trace-detail-header { padding: 8px 14px; }
+        body.embed .trace-detail-header h2 { font-size: 0.85rem; margin-bottom: 4px; }
+        body.embed .trace-stats { gap: 8px; }
+        body.embed .trace-scroll { padding: 8px 14px; }
+        body.embed .event { margin-bottom: 8px; }
+        body.embed .event-head { padding: 6px 10px; font-size: 0.72rem; }
+        body.embed .event-body { padding: 6px 10px; font-size: 0.72rem; }
+    </style>
+</head>
+<body class="{% if embed %}embed{% endif %}">
+    <div class="traces-layout">
+        <!-- List -->
+        <aside class="traces-sidebar">
+            <div class="traces-sidebar-header">
+                <h1>Agent 运行回放</h1>
+                <div class="trace-filters">
+                    <button data-filter="all" class="active">全部</button>
+                    <button data-filter="success">成功</button>
+                    <button data-filter="failed">失败</button>
+                    <button class="refresh-btn" id="btnRefresh">刷新</button>
+                </div>
+            </div>
+            <div class="trace-list" id="traceList"></div>
+        </aside>
+        <!-- Detail -->
+        <main class="trace-main">
+            <div class="trace-detail-header">
+                {% if not embed %}
+                <a class="back-link" href="/">← 返回聊天</a>
+                {% endif %}
+                <h2 id="detailTitle">选择一个运行记录查看回放</h2>
+                <div class="detail-meta" id="detailMeta"></div>
+            </div>
+            <div class="trace-scroll" id="detailScroll">
+                <div class="trace-empty" id="detailEmpty">左侧列表展示每次 agent 运行的完整记录（LLM 调用、工具执行、计划、记忆、终止原因）。</div>
+            </div>
+        </main>
+    </div>
+    <script src="/static/js/traces.js?v=20260803d"></script>
+</body>
+</html>
