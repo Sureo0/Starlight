@@ -322,10 +322,25 @@ def save_config(cfg):
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
-            tmp.replace(CONFIG_FILE)
+            # Windows: 杀毒软件/Defender 实时防护会短暂锁定新生成的 tmp 文件,
+            # 导致 os.replace 抛 PermissionError (WinError 5)。小延迟重试几次。
+            last_exc = None
+            for _attempt in range(5):
+                try:
+                    tmp.replace(CONFIG_FILE)
+                    last_exc = None
+                    break
+                except PermissionError as e:
+                    last_exc = e
+                    time.sleep(0.2 * (_attempt + 1))
+            if last_exc is not None:
+                raise last_exc
         except Exception:
             if tmp.exists():
-                tmp.unlink()
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
             raise
 
 
@@ -970,6 +985,9 @@ def update_config():
         with _config_lock:
             config.update(data)
             save_config(config)
+            # 重新解析 ${ENV} 占位符为真实 key,避免内存中残留字面占位符
+            # (否则 LLM 请求会携带 "Bearer ${DEEPSEEK_API_KEY}" -> 401)
+            config = _resolve_env_api_keys(config)
             llm = LLMClient(config)
             agent_llm.update_config(config)
     except Exception as e:
@@ -1014,6 +1032,9 @@ def add_backend():
                 _env_api_keys[env_name] = key
 
             save_config(config)
+            # 同上:add_backend 把 api_key 写成 ${ENV} 占位符后,内存必须重新
+            # 解析成真实 key,否则后续 LLM 请求会携带字面占位符导致 401。
+            config = _resolve_env_api_keys(config)
             llm = LLMClient(config)
             agent_llm.update_config(config)
     except Exception as e:
