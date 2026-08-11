@@ -290,7 +290,7 @@ def test_stream_endpoint_accepts_attachments():
 
     captured = {}
     orig_stream = app_module.agent.run_stream
-    def fake_stream(message, conversation_id=None, run_id=None, user_attachments=None):
+    def fake_stream(message, conversation_id=None, run_id=None, user_attachments=None, persist_message=None):
         captured["message"] = message
         captured["atts"] = user_attachments
         yield {"type": "text", "content": "done"}

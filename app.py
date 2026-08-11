@@ -84,9 +84,13 @@ _file_handler = TimedRotatingFileHandler(
 _file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 logger.addHandler(_file_handler)
 
-# Access log - separate file for request/response tracking
+# Access log - separate file for request/response tracking.
+# propagate=False keeps per-request INFO lines OUT of the console
+# (they still go to logs/access.log); errors surface via error_logger
+# and the ai-chat WARNING+ handlers.
 access_logger = logging.getLogger("ai-chat.access")
 access_logger.setLevel(logging.INFO)
+access_logger.propagate = False
 _access_handler = TimedRotatingFileHandler(
     LOG_DIR / "access.log", when="midnight", backupCount=30, encoding="utf-8"
 )
@@ -1337,12 +1341,15 @@ def api_chat():
     current_agent.config.cancel_confirm_required = agent.config.cancel_confirm_required
     current_agent.config.cancel_expiry = agent.config.cancel_expiry
 
-    # Run agent
+    # Run agent. user_message passed to the agent carries the generated
+    # attachment/mount descriptions, but the conversation history must keep
+    # the user's raw input — persist_message does that.
     llm_start = time.time()
     try:
         result = current_agent.run(
             effective_message, conversation_id=conv_id, run_id=run_id,
             user_attachments=image_parts or None,
+            persist_message=user_message,
         )
         llm_duration = time.time() - llm_start
         metrics.record_llm_call(
@@ -1639,6 +1646,10 @@ def api_agent_stream():
             kind = "image" if ext in _IMAGE_EXTS else ("text" if ext in _TEXT_EXTS else "doc")
             stream_att_parts.append({"file_id": fid, "name": name, "kind": kind, "ext": ext, "conv_id": conv_id})
 
+    # Keep the user's raw input for history persistence (user_message below
+    # gets overwritten with the generated attachment/mount descriptions).
+    _raw_user_message = user_message
+
     # Effective message: append attachment description lines
     stream_attach_lines = []
     for att in attachments[:8]:
@@ -1670,7 +1681,7 @@ def api_agent_stream():
     conv = load_conversation(conv_id) if conv_id else None
     if not conv:
         conv_id = uuid.uuid4().hex[:12]
-        title = user_message[:40]
+        title = _raw_user_message[:40]
         db.create_conversation(conv_id, title=title)
         conv = {"id": conv_id, "title": title, "messages": []}
         metrics.record_conversation_created()
@@ -1681,7 +1692,7 @@ def api_agent_stream():
             "Active model '%s' has no vision support — refusing image request (stream)",
             getattr(agent_llm, "model_name", ""),
         )
-        db.add_message(conv_id, "user", user_message,
+        db.add_message(conv_id, "user", _raw_user_message,
                        attachments=stream_att_parts or None)
         db.update_conversation(conv_id)
 
@@ -1702,6 +1713,7 @@ def api_agent_stream():
             for event in agent.run_stream(
                 user_message, conversation_id=conv_id, run_id=run_id,
                 user_attachments=stream_att_parts or None,
+                persist_message=_raw_user_message,
             ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
@@ -1712,7 +1724,7 @@ def api_agent_stream():
             try:
                 messages = db.get_messages(conv_id)
                 if len(messages) <= 2:
-                    db.update_conversation(conv_id, title=user_message[:40])
+                    db.update_conversation(conv_id, title=_raw_user_message[:40])
                 db.update_conversation(conv_id)
                 metrics.record_chat_message()
             except Exception:

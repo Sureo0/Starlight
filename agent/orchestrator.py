@@ -308,6 +308,10 @@ class AgentOrchestrator:
         # Attachment metadata for the current run's user message (persisted
         # with the message); set by _build_initial_messages.
         self._current_attachments: list | None = None
+        # Message text to persist for the current run's user message
+        # (may differ from the LLM-facing message when attachment
+        # descriptions are prepended); defaults to the user message.
+        self._persist_message: str | None = None
         # Per-run approval decision cache: tool name -> True (approved) /
         # False (rejected). When approval_remember is on, the user's decision
         # for a tool applies to ALL subsequent calls of that tool within the
@@ -579,6 +583,7 @@ class AgentOrchestrator:
         conversation_id: str | None = None,
         run_id: str | None = None,
         user_attachments: list | None = None,
+        persist_message: str | None = None,
     ) -> dict:
         """
         Execute the agent loop for a user message.
@@ -589,6 +594,10 @@ class AgentOrchestrator:
             run_id: Optional client-supplied id for cancellation tracking.
                     The front-end generates one so it can cancel the run
                     while the synchronous request is still in flight.
+            persist_message: Optional override for the message text saved to
+                    the conversation history (e.g. the user's raw input when
+                    user_message carries generated attachment descriptions).
+                    Defaults to user_message.
 
         Returns:
             dict with keys: "content", "tool_calls_made", "iterations", "events", "mode"
@@ -599,6 +608,7 @@ class AgentOrchestrator:
         # Cancellation: unique id for this run (front-end can cancel it)
         self.current_run_id = run_id or self._new_run_id()
         self._current_attachments = None
+        self._persist_message = persist_message or user_message
 
         events: list[AgentEvent] = []
         tool_calls_made = 0
@@ -909,7 +919,7 @@ class AgentOrchestrator:
                 # Persist to database
                 if conversation_id and self.db:
                     self.db.add_message(
-                        conversation_id, "user", user_message,
+                        conversation_id, "user", self._persist_message or user_message,
                         attachments=self._current_attachments,
                     )
                     self.db.add_message(conversation_id, "assistant", response.content)
@@ -944,7 +954,7 @@ class AgentOrchestrator:
                     events.append(AgentEvent(type="text", content=content, iteration=iteration + 1))
                     if conversation_id and self.db:
                         self.db.add_message(
-                            conversation_id, "user", user_message,
+                            conversation_id, "user", self._persist_message or user_message,
                             attachments=self._current_attachments,
                         )
                         self.db.add_message(conversation_id, "assistant", content)
@@ -1238,7 +1248,7 @@ class AgentOrchestrator:
             events.append(AgentEvent(type="error", content=content))
             if conversation_id and self.db:
                 self.db.add_message(
-                    conversation_id, "user", user_message,
+                    conversation_id, "user", self._persist_message or user_message,
                     attachments=self._current_attachments,
                 )
                 self.db.add_message(conversation_id, "assistant", content)
@@ -1285,12 +1295,18 @@ class AgentOrchestrator:
         user_message: str,
         conversation_id: str | None = None,
         run_id: str | None = None,
+        user_attachments: list | None = None,
+        persist_message: str | None = None,
     ) -> Generator[dict, None, None]:
         """
         Execute the agent loop and yield events as they happen (SSE streaming).
 
         Args:
             run_id: Optional client-supplied id for cancellation tracking.
+            persist_message: Optional override for the message text saved to
+                    the conversation history (e.g. the user's raw input when
+                    user_message carries generated attachment descriptions).
+                    Defaults to user_message.
         """
         # Per-run approval memory: fresh decisions for every new task
         self._reset_approval_memory()
@@ -1298,6 +1314,7 @@ class AgentOrchestrator:
         # Cancellation: unique id for this run (front-end can cancel it)
         self.current_run_id = run_id or self._new_run_id()
         self._current_attachments = None
+        self._persist_message = persist_message or user_message
 
         # --- Observability: create recorder for this run ---
         # (Sub-agent runs attach their own recorder; only top-level runs
@@ -1345,7 +1362,10 @@ class AgentOrchestrator:
                 return
 
         try:
-            yield from self._run_stream_loop(user_message, conversation_id)
+            yield from self._run_stream_loop(
+                user_message, conversation_id,
+                user_attachments=user_attachments,
+            )
         finally:
             if acquired and self.config.rate_limit_enabled:
                 self._rate_limiter.release_concurrent()
@@ -1523,7 +1543,7 @@ class AgentOrchestrator:
 
                 if conversation_id and self.db:
                     self.db.add_message(
-                        conversation_id, "user", user_message,
+                        conversation_id, "user", self._persist_message or user_message,
                         attachments=self._current_attachments,
                     )
                     self.db.add_message(conversation_id, "assistant", response.content)
@@ -1552,7 +1572,7 @@ class AgentOrchestrator:
                     yield {"type": "text", "content": content}
                     if conversation_id and self.db:
                         self.db.add_message(
-                            conversation_id, "user", user_message,
+                            conversation_id, "user", self._persist_message or user_message,
                             attachments=self._current_attachments,
                         )
                         self.db.add_message(conversation_id, "assistant", content)

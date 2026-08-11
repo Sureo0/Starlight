@@ -42,6 +42,10 @@
                     <div class="user-dropdown" id="userDropdown">
                         <div class="dropdown-header" id="dropdownHeader">Not logged in</div>
                         <div class="dropdown-divider"></div>
+                        <button class="dropdown-item" id="btnDropdownTraces">📜 Traces</button>
+                        <button class="dropdown-item" id="btnDropdownSettings">⚙️ Settings</button>
+                        <button class="dropdown-item" id="btnDropdownMonitor">📊 Monitor</button>
+                        <div class="dropdown-divider"></div>
                         <button class="dropdown-item" id="btnDropdownLogin">Login</button>
                         <button class="dropdown-item" id="btnDropdownChangePw">Change Password</button>
                         <button class="dropdown-item dropdown-danger" id="btnDropdownLogout">Logout</button>
@@ -109,25 +113,6 @@
             </div>
             <iframe id="tracesFrame" src="/traces?embed=1" frameborder="0"></iframe>
         </aside>
-
-        <!-- Gear button (bottom-right) -->
-        <div class="gear-fab" id="gearFab" title="更多">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-            </svg>
-        </div>
-        <div class="gear-menu" id="gearMenu">
-            <button class="gear-menu-item" id="btnGearTraces">
-                <span>📜</span> Traces
-            </button>
-            <button class="gear-menu-item" id="btnGearSettings">
-                <span>⚙️</span> Settings
-            </button>
-            <button class="gear-menu-item" id="btnGearMonitor">
-                <span>📊</span> Monitor
-            </button>
-        </div>
     </div>
 
     <!-- Approval (human-in-the-loop) notifications -->
@@ -449,6 +434,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=20260803b"></script>
+    <script src="/static/js/app.js?v=20260810a"></script>
 </body>
 </html>

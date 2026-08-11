@@ -4,16 +4,51 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Starlight</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='img/favicon.ico') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/icon-512.png') }}">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #ffffff;
             color: #1a1a2e;
-            height: 100vh;
+            display: flex;
+            background: #ffffff;
+        }
+
+        /* 左半:图片播放区(由左往右循环移动) */
+        .backdrop-panel {
+            flex: 1 1 50%;
+            position: relative;
+            overflow: hidden;
+            background: #0f0c29;
+            min-height: 100vh;
+        }
+        .backdrop-panel img {
+            position: absolute;
+            top: 0; left: 0;
+            width: 130%;
+            height: 100%;
+            object-fit: cover;
+            /* 单图由左往右循环播放:图片比容器宽 30%,
+               从右端对齐位置开始,整体向右移动到左端对齐,
+               再跳回起点循环(全程覆盖不露白) */
+            animation: slide-ltr 18s ease-in-out infinite;
+            will-change: transform;
+        }
+        @keyframes slide-ltr {
+            from { transform: translateX(-23.08%); } /* 图片右缘与容器右缘对齐(偏左) */
+            to   { transform: translateX(0); }        /* 图片左缘与容器左缘对齐(偏右) */
+        }
+
+        /* 右半:登录区 */
+        .login-panel {
+            flex: 1 1 50%;
             display: flex;
             align-items: center;
             justify-content: center;
+            background: #ffffff;
+            padding: 24px;
         }
         .login-card {
             background: #ffffff;
@@ -77,26 +112,37 @@
             margin-bottom: 16px;
             text-align: center;
         }
+
+        /* 窄屏:轮播区收起,只显示登录 */
+        @media (max-width: 768px) {
+            .backdrop-panel { display: none; }
+            .login-panel { flex: 1 1 100%; }
+        }
     </style>
 </head>
 <body>
-    <div class="login-card">
-        <h1>AI Chat</h1>
-        <p class="subtitle">Please log in to continue</p>
-        {% if error %}
-        <div class="error">{{ error }}</div>
-        {% endif %}
-        <form method="POST">
-            <div class="form-group">
-                <label>Username</label>
-                <input type="text" name="username" autocomplete="username" autofocus required>
-            </div>
-            <div class="form-group">
-                <label>Password</label>
-                <input type="password" name="password" autocomplete="current-password" required>
-            </div>
-            <button type="submit" class="btn-login">Log In</button>
-        </form>
+    <div class="backdrop-panel" aria-hidden="true">
+        <img src="{{ url_for('static', filename='img/backdrop.png') }}" alt="">
+    </div>
+    <div class="login-panel">
+        <div class="login-card">
+            <h1>Starlight</h1>
+            <p class="subtitle">Please log in to continue</p>
+            {% if error %}
+            <div class="error">{{ error }}</div>
+            {% endif %}
+            <form method="POST">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" name="username" autocomplete="username" autofocus required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" name="password" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="btn-login">Log In</button>
+            </form>
+        </div>
     </div>
 </body>
 </html>

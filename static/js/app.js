@@ -1254,8 +1254,8 @@
         window.location.href = '/logout';
     });
 
-    // Settings (via gear menu)
-    $('#btnGearSettings').addEventListener('click', function () { closeGearMenu(); openSettings(); });
+    // Settings (user dropdown)
+    $('#btnDropdownSettings').addEventListener('click', function () { closeDropdown(); openSettings(); });
     $('#btnCloseSettings').addEventListener('click', closeSettings);
     $('#btnCancelSettings').addEventListener('click', closeSettings);
     $('#btnSaveSettings').addEventListener('click', saveSettings);
@@ -1265,8 +1265,8 @@
         applyPreset(this.value);
     });
 
-    // Monitor (via gear menu)
-    $('#btnGearMonitor').addEventListener('click', function () { closeGearMenu(); openMonitor(); });
+    // Monitor (user dropdown)
+    $('#btnDropdownMonitor').addEventListener('click', function () { closeDropdown(); openMonitor(); });
     $('#btnCloseMonitor').addEventListener('click', closeMonitor);
     $('#btnCloseMonitor2').addEventListener('click', closeMonitor);
     $('#monitorModal').addEventListener('click', function (e) { if (e.target === e.currentTarget) closeMonitor(); });
@@ -1566,55 +1566,25 @@
     mountPathInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') document.getElementById('btnDoMount').click(); });
 
     // ============================================================
-    // Gear menu (bottom-right) + Traces panel
+    // Traces panel (opened from the user dropdown)
     // ============================================================
-    var gearFab = document.getElementById('gearFab');
-    var gearMenu = document.getElementById('gearMenu');
-
-    function closeGearMenu() { if (gearMenu) gearMenu.classList.remove('show'); }
-    function toggleGearMenu(e) {
-        if (e) e.stopPropagation();
-        if (gearMenu) gearMenu.classList.toggle('show');
-    }
-    if (gearFab) gearFab.addEventListener('click', toggleGearMenu);
-    document.addEventListener('click', function (e) {
-        if (gearMenu && !gearMenu.contains(e.target) && gearFab && !gearFab.contains(e.target)) {
-            closeGearMenu();
-        }
-    });
-
-    // Traces panel: close button hides it; the gear menu can re-open it.
-    // The gear FAB position follows the panel: when the panel is hidden the
-    // FAB (and its menu) move to the right edge so they never overlap the
-    // message send button in the middle column.
     var btnCloseTraces = document.getElementById('btnCloseTraces');
     var tracesPanel = document.getElementById('tracesPanel');
 
-    function updateGearPosition(panelHidden) {
-        if (panelHidden) {
-            if (gearFab) gearFab.style.right = '20px';
-            if (gearMenu) gearMenu.style.right = '20px';
-        } else {
-            if (gearFab) gearFab.style.right = '';
-            if (gearMenu) gearMenu.style.right = '';
-        }
+    var btnDropdownTraces = document.getElementById('btnDropdownTraces');
+    if (btnDropdownTraces) {
+        btnDropdownTraces.addEventListener('click', function () {
+            closeDropdown();
+            if (tracesPanel) {
+                tracesPanel.classList.remove('hidden');
+            }
+        });
     }
 
     if (btnCloseTraces) {
         btnCloseTraces.addEventListener('click', function () {
             if (tracesPanel) {
                 tracesPanel.classList.add('hidden');
-                updateGearPosition(true);
-            }
-        });
-    }
-    var btnGearTraces = document.getElementById('btnGearTraces');
-    if (btnGearTraces) {
-        btnGearTraces.addEventListener('click', function () {
-            closeGearMenu();
-            if (tracesPanel) {
-                tracesPanel.classList.remove('hidden');
-                updateGearPosition(false);
             }
         });
     }

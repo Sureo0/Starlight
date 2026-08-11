@@ -1,6 +1,6 @@
 # Starlight
 
-**A Self-Hosted, Lightweight Multi-Model AI Agent Application**
+**A Self-Hosted, Lightweight Multi-Model AI Chat Application**
 
 [![Python](https://img.shields.io/badge/Python-3.10+-yellow.svg)](https://www.python.org/downloads/)
 [![Flask](https://img.shields.io/badge/Flask-3.x-blue.svg)](https://flask.palletsprojects.com/)

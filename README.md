@@ -1,8 +1,8 @@
 # Starlight
 
-[EN](README_EN.md)
+[EN](AI-Chat\README_EN.md)
 
-**个人自托管轻量级多模型 AI Agent 应用**
+**个人自托管轻量级多模型 AI 聊天应用**
 
 [![Python](https://img.shields.io/badge/Python-3.10+-yellow.svg)](https://www.python.org/downloads/)
 [![Flask](https://img.shields.io/badge/Flask-3.x-blue.svg)](https://flask.palletsprojects.com/)
