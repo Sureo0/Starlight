@@ -255,13 +255,21 @@ class ApprovalManager:
         self,
         req_id: int,
         timeout: float | None = None,
+        should_stop: callable | None = None,
     ) -> str:
         """Block (poll) until the request leaves 'pending' or the timeout hits.
 
         Returns the final status: approved / rejected / expired / canceled.
+        `should_stop` (optional): a zero-arg callback polled every iteration —
+        when it returns True the wait aborts immediately with "canceled"
+        (used to make a user cancellation responsive while the run is paused
+        on an approval request).
         """
         deadline = time.time() + (timeout if timeout is not None else self.expiry_seconds)
         while True:
+            if should_stop is not None and should_stop():
+                self.store.decide(req_id, CANCELED, "用户取消")
+                return CANCELED
             row = self.store.get(req_id)
             if row is not None:
                 status = row["status"]

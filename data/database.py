@@ -114,6 +114,7 @@ class Database:
                 user_id     INTEGER,
                 created_at  TEXT    NOT NULL,
                 updated_at  TEXT,
+                skills      TEXT    DEFAULT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
@@ -124,6 +125,7 @@ class Database:
                 content         TEXT    NOT NULL,
                 timestamp       TEXT    NOT NULL,
                 attachments     TEXT    DEFAULT NULL,
+                reasoning       TEXT    DEFAULT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
 
@@ -196,6 +198,31 @@ class Database:
                 logger.info("Migrated: messages.attachments column added")
         except Exception:
             logger.warning("messages.attachments migration failed (non-fatal)", exc_info=True)
+
+        # `reasoning` column on messages (model thinking process, persisted so
+        # it survives conversation reloads).
+        try:
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(messages)").fetchall()]
+            if cols and "reasoning" not in cols:
+                conn.execute(
+                    "ALTER TABLE messages ADD COLUMN reasoning TEXT DEFAULT NULL"
+                )
+                conn.commit()
+                logger.info("Migrated: messages.reasoning column added")
+        except Exception:
+            logger.warning("messages.reasoning migration failed (non-fatal)", exc_info=True)
+
+        # `skills` column on conversations (skills attached to a conversation).
+        try:
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()]
+            if cols and "skills" not in cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN skills TEXT DEFAULT NULL"
+                )
+                conn.commit()
+                logger.info("Migrated: conversations.skills column added")
+        except Exception:
+            logger.warning("conversations.skills migration failed (non-fatal)", exc_info=True)
 
         # FTS index for memories (separate try: FTS5 may not exist on some builds)
         self._init_memories_fts()
@@ -334,13 +361,18 @@ class Database:
         """Get a conversation with all its messages."""
         conn = self._get_conn()
         row = conn.execute(
-            "SELECT id, title, user_id, created_at, updated_at FROM conversations WHERE id = ?",
+            "SELECT id, title, user_id, created_at, updated_at, skills FROM conversations WHERE id = ?",
             (conv_id,),
         ).fetchone()
         if not row:
             return None
 
         conv = dict(row)
+        if conv.get("skills"):
+            try:
+                conv["skills"] = json.loads(conv["skills"])
+            except Exception:
+                conv["skills"] = None
         messages = self.get_messages(conv_id)
         conv["messages"] = messages
         return conv
@@ -375,6 +407,16 @@ class Database:
             )
         conn.commit()
 
+    def set_conversation_skills(self, conv_id, skills):
+        """Store the list of skill names attached to a conversation (JSON)."""
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE conversations SET skills = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(skills or [], ensure_ascii=False), now, conv_id),
+        )
+        conn.commit()
+
     def delete_conversation(self, conv_id):
         """Delete a conversation and all its messages (CASCADE)."""
         conn = self._get_conn()
@@ -395,7 +437,7 @@ class Database:
         conn = self._get_conn()
         if limit:
             rows = conn.execute(
-                """SELECT id, role, content, timestamp, attachments
+                """SELECT id, role, content, timestamp, attachments, reasoning
                    FROM messages
                    WHERE conversation_id = ?
                    ORDER BY id ASC
@@ -404,7 +446,7 @@ class Database:
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT id, role, content, timestamp, attachments
+                """SELECT id, role, content, timestamp, attachments, reasoning
                    FROM messages
                    WHERE conversation_id = ?
                    ORDER BY id ASC""",
@@ -424,12 +466,15 @@ class Database:
             out.append(m)
         return out
 
-    def add_message(self, conv_id, role, content, timestamp=None, attachments=None):
+    def add_message(self, conv_id, role, content, timestamp=None, attachments=None,
+                    reasoning=None):
         """Add a message to a conversation.
 
         attachments: optional list of dicts stored as JSON in the
         `attachments` column (e.g. [{"file_id": "...", "name": "a.png",
         "kind": "image"}]).
+        reasoning: optional assistant thinking-process text (model
+        reasoning_content), persisted so it survives conversation reloads.
         """
         if timestamp is None:
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -438,8 +483,8 @@ class Database:
         if attachments:
             att_json = json.dumps(attachments, ensure_ascii=False)
         cursor = conn.execute(
-            "INSERT INTO messages (conversation_id, role, content, timestamp, attachments) VALUES (?, ?, ?, ?, ?)",
-            (conv_id, role, content, timestamp, att_json),
+            "INSERT INTO messages (conversation_id, role, content, timestamp, attachments, reasoning) VALUES (?, ?, ?, ?, ?, ?)",
+            (conv_id, role, content, timestamp, att_json, reasoning),
         )
         conn.commit()
 

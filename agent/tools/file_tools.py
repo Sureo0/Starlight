@@ -131,6 +131,7 @@ class ReadFileTool(Tool):
                         "path": str(resolved),
                         "operation": "read",
                         "run_id": getattr(self, "_current_run_id", None),
+                        "conv_id": getattr(self, "_current_conv_id", None),
                     })
                     blocked = _approval_result(verdict)
                     if blocked is not None:
@@ -324,6 +325,7 @@ class WriteFileTool(Tool):
                         "path": str(resolved),
                         "operation": "write",
                         "run_id": getattr(self, "_current_run_id", None),
+                        "conv_id": getattr(self, "_current_conv_id", None),
                     })
                     blocked = _approval_result(verdict)
                     if blocked is not None:
@@ -419,6 +421,7 @@ class ListFilesTool(Tool):
                         "path": str(resolved),
                         "operation": "list",
                         "run_id": getattr(self, "_current_run_id", None),
+                        "conv_id": getattr(self, "_current_conv_id", None),
                     })
                     blocked = _approval_result(verdict)
                     if blocked is not None:

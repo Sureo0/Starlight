@@ -118,3 +118,6 @@ data/frpc/
 .env
 .env.*
 !.env.example
+
+# 前端开发临时依赖（npm install 残留，非项目依赖）
+node_modules/

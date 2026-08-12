@@ -428,8 +428,8 @@ def save_conversation(conv_id, data):
         ts = msg.get("timestamp", datetime.now(timezone.utc).isoformat())
         if role in ("user", "assistant", "system") and content:
             conn.execute(
-                "INSERT INTO messages (conversation_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
-                (conv_id, role, content, ts),
+                "INSERT INTO messages (conversation_id, role, content, timestamp, reasoning) VALUES (?, ?, ?, ?, ?)",
+                (conv_id, role, content, ts, msg.get("reasoning")),
             )
     conn.commit()
 
@@ -625,6 +625,7 @@ agent = create_agent(
     subagent_max_duration=int(_subagent_cfg.get("max_duration", 300)),
     mcp_enabled=bool(_mcp_cfg or True),
     mcp_servers=_mcp_cfg,
+    skills_dir=str(BASE_DIR / "skills"),
 )
 
 # Wire the module-level agent with mount support (mount_manager is defined
@@ -711,6 +712,22 @@ def _mount_approval_cb(tool_name: str, args: dict) -> dict | None:
                 "error": "挂载不存在或已卸载，已阻止访问",
                 "metadata": {"approval": "mount_missing"},
             }
+
+        # Conversation scoping: a mount only works in the conversation it was
+        # created for. Access from any other conversation (or a new one) is
+        # blocked — the user must mount the folder again there.
+        conv_id = args.get("conv_id")
+        mount_conv = mount.get("conv_id") or ""
+        if conv_id and mount_conv and conv_id != mount_conv:
+            return {
+                "success": False,
+                "error": (
+                    f"该挂载属于其他对话，不能在此对话中使用。"
+                    f"请在本对话中重新挂载文件夹。"
+                ),
+                "metadata": {"approval": "mount_wrong_conversation"},
+            }
+
         policy = mount.get("policy", "always_ask")
         run_id = args.get("run_id")
 
@@ -734,7 +751,13 @@ def _mount_approval_cb(tool_name: str, args: dict) -> dict | None:
             },
         )
         status = approval_manager.wait_for_decision(
-            req.get("id"), timeout=approval_manager.expiry_seconds
+            req.get("id"), timeout=approval_manager.expiry_seconds,
+            # A user cancellation must not wait out the full approval
+            # expiry while the run is paused on a mount approval.
+            should_stop=lambda: (
+                run_id is not None
+                and cancellation_manager.should_stop(run_id)
+            ),
         )
         if status == "approved":
             # Remember the approval for the rest of this run (allow policy).
@@ -807,6 +830,7 @@ scheduler = AgentScheduler(
         mcp_servers=_mcp_cfg,
         mount_manager=mount_manager,
         mount_approval_cb=_mount_approval_cb,
+        skills_dir=str(BASE_DIR / "skills"),
     ),
     rate_limiter=agent._rate_limiter,
     enabled=bool(_scheduled_cfg.get("enabled", True)),
@@ -1331,6 +1355,7 @@ def api_chat():
         user_id=current_user["id"] if current_user else None,
         mount_manager=mount_manager,
         mount_approval_cb=_mount_approval_cb,
+        skills_dir=str(BASE_DIR / "skills"),
     )
     current_agent.trace_sink = _trace_sink
     current_agent.approval_manager = approval_manager
@@ -1373,6 +1398,7 @@ def api_chat():
     return jsonify({
         "conversation_id": conv_id,
         "content": result["content"],
+        "reasoning": result.get("reasoning", ""),
         "title": conv["title"],
         "cancelled": bool(result.get("cancelled")),
     })
@@ -1473,6 +1499,37 @@ def api_uploaded_file(fname):
                 return send_from_directory(str(root), safe)
         return jsonify({"error": "文件不存在"}), 404
     return jsonify({"error": "Invalid path"}), 400
+
+
+@app.route("/api/uploads/<path:fname>", methods=["DELETE"])
+@login_required
+def api_delete_upload(fname):
+    """Delete an uploaded file (fname = <conv_id>/<file_id><ext>).
+
+    Called when the user removes a pending upload from the composer — the
+    file must not linger in the conversation's file list.
+    """
+    if ".." in fname or "\\" in fname:
+        return jsonify({"error": "Invalid path"}), 400
+    parts = fname.split("/")
+    if len(parts) == 2:
+        conv_id, fid = parts
+        if not _validate_conv_id(conv_id):
+            return jsonify({"error": "Invalid path"}), 400
+        safe_fid = _safe_filename(fid)
+        fp = UPLOAD_DIR / conv_id / safe_fid
+    elif len(parts) == 1:
+        safe = _safe_filename(fname)
+        fp = UPLOAD_DIR / safe
+    else:
+        return jsonify({"error": "Invalid path"}), 400
+    try:
+        if fp.is_file():
+            fp.unlink()
+            return jsonify({"ok": True})
+    except OSError as e:
+        return jsonify({"error": f"删除失败: {e}"}), 500
+    return jsonify({"error": "文件不存在"}), 404
 
 
 def _upload_path(file_id: str, name: str = "", conv_id: str | None = None):
@@ -1595,6 +1652,7 @@ def api_agent_chat():
     return jsonify({
         "conversation_id": conv_id,
         "content": result["content"],
+        "reasoning": result.get("reasoning", ""),
         "title": conv["title"],
         "tool_calls_made": result["tool_calls_made"],
         "iterations": result["iterations"],
@@ -1697,24 +1755,33 @@ def api_agent_stream():
         db.update_conversation(conv_id)
 
         def _vision_blocked_stream():
-            yield f"data: {json.dumps({'type': 'text', 'content': '当前大模型不支持多模态，无法查看图片。请切换到支持图片输入的模型后再试。'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'text', 'content': '当前大模型不支持多模态，无法查看图片。请切换到支持图片输入的模型后再试。', 'conversation_id': conv_id}, ensure_ascii=False)}\n\n"
         return Response(
             _vision_blocked_stream(),
             mimetype="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
             },
         )
 
     def generate():
         try:
+            # Emit the conversation id FIRST — a new conversation is created
+            # before the stream starts, and long approval waits (up to the
+            # expiry) must not prevent the front-end from adopting the id.
+            yield f"data: {json.dumps({'type': 'start', 'conversation_id': conv_id}, ensure_ascii=False)}\n\n"
             for event in agent.run_stream(
                 user_message, conversation_id=conv_id, run_id=run_id,
                 user_attachments=stream_att_parts or None,
                 persist_message=_raw_user_message,
             ):
+                # Attach the conversation id to terminal events so the
+                # front-end can adopt the conversation (first message of a
+                # new conversation has no conv_id up front).
+                if event.get("type") in ("done", "cancelled", "error"):
+                    event = dict(event)
+                    event["conversation_id"] = conv_id
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.exception("Agent stream failed")
@@ -1736,7 +1803,6 @@ def api_agent_stream():
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
         },
     )
 
@@ -1759,8 +1825,89 @@ def api_agent_tools():
 @app.route("/api/mounts", methods=["GET"])
 @login_required
 def api_mounts_list():
-    """List mounted folders."""
-    return jsonify({"mounts": mount_manager.list()})
+    """List mounted folders. Scoped to the current conversation: ?conv_id=...
+    returns only the mounts attached to that conversation (mounts are
+    conversation-scoped — every conversation mounts its own folders)."""
+    conv_id = request.args.get("conv_id") or None
+    mounts = mount_manager.list(conv_id)
+    # Attach the owning conversation name for UI display
+    result = []
+    for m in mounts:
+        m = dict(m)
+        if m.get("conv_id"):
+            conv = db.get_conversation(m["conv_id"])
+            m["conv_title"] = conv["title"] if conv else m["conv_id"]
+        result.append(m)
+    return jsonify({"mounts": result})
+
+
+# ---- Skills API (技能) ----
+
+SKILLS_DIR = BASE_DIR / "skills"
+
+def _list_skills() -> list[dict]:
+    """List available skills: one entry per folder containing a SKILL.md."""
+    if not SKILLS_DIR.is_dir():
+        return []
+    skills = []
+    for folder in sorted(SKILLS_DIR.iterdir()):
+        if not folder.is_dir():
+            continue
+        skill_file = folder / "SKILL.md"
+        if not skill_file.is_file():
+            continue
+        name = folder.name
+        description = ""
+        try:
+            head = skill_file.read_text(encoding="utf-8", errors="replace")[:300]
+            for line in head.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    description = line[:120]
+                    break
+        except Exception:
+            pass
+        skills.append({"name": name, "description": description})
+    return skills
+
+
+@app.route("/api/skills", methods=["GET"])
+@login_required
+def api_skills_list():
+    """List available skills (from the skills/ folder)."""
+    return jsonify({"skills": _list_skills()})
+
+
+@app.route("/api/skills/<path:skill_name>/content", methods=["GET"])
+@login_required
+def api_skills_content(skill_name):
+    """Return the SKILL.md content of one skill."""
+    from werkzeug.utils import safe_join
+    base = SKILLS_DIR.resolve()
+    joined = safe_join(str(base), skill_name, "SKILL.md")
+    if not joined:
+        return jsonify({"error": "Skill not found"}), 404
+    skill_file = Path(joined)
+    if not skill_file.is_file():
+        return jsonify({"error": "Skill not found"}), 404
+    try:
+        content = skill_file.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return jsonify({"error": f"Read failed: {e}"}), 500
+    return jsonify({"name": skill_name, "content": content})
+
+
+@app.route("/api/conversations/<conv_id>/skills", methods=["PUT"])
+@login_required
+def api_conversation_skills(conv_id):
+    """Set the skills attached to a conversation. Body: {"skills": [...]}"""
+    data = request.get_json(silent=True) or {}
+    skills = data.get("skills") or []
+    # Only keep skill names that actually exist
+    available = {s["name"] for s in _list_skills()}
+    skills = [s for s in skills if s in available]
+    db.set_conversation_skills(conv_id, skills)
+    return jsonify({"ok": True, "skills": skills})
 
 
 @app.route("/api/mounts", methods=["POST"])
@@ -1768,15 +1915,25 @@ def api_mounts_list():
 def api_mounts_create():
     """Mount a local folder by absolute path.
 
-    Body: {"path": "...", "policy": "always_ask" | "allow"}
+    Body: {"path": "...", "policy": "always_ask" | "allow", "conv_id": "..."}
       - always_ask (default): ask the human before EVERY access.
       - allow: ask on first access per run, then proceed within the run.
+      - conv_id: REQUIRED — mounts are conversation-scoped (they only work
+        in their own conversation), so a mount without a conversation would
+        be an orphan nobody can use.
     """
     data = request.get_json(silent=True) or {}
     path = (data.get("path") or "").strip()
     name = (data.get("name") or "").strip() or None
     policy = (data.get("policy") or "always_ask").strip()
-    mount, err = mount_manager.mount(path, name, policy=policy)
+    conv_id = data.get("conv_id") or None
+    if not conv_id:
+        return jsonify({"error": "请先选择或新建对话，再挂载文件夹"}), 400
+    if not _validate_conv_id(conv_id):
+        return jsonify({"error": "Invalid conversation id"}), 400
+    if db.get_conversation(conv_id) is None:
+        return jsonify({"error": "对话不存在，请先新建或选择对话"}), 400
+    mount, err = mount_manager.mount(path, name, policy=policy, conv_id=conv_id)
     if err:
         return jsonify({"error": err}), 400
     return jsonify({"ok": True, "mount": mount}), 201
@@ -2547,7 +2704,10 @@ if __name__ == "__main__":
             host=host,
             port=port,
             threads=args.workers,
-            channel_timeout=120,
+            # Must exceed the longest blocked request (approval waits up to
+            # expiry_seconds=300): channel_timeout kills idle channels, and
+            # a stream paused on an approval card must survive.
+            channel_timeout=600,
             cleanup_interval=30,
             recv_bytes=65536,
         )

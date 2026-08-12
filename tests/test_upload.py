@@ -124,10 +124,11 @@ def _patch_create_agent():
                 self.approval_manager = None
                 self.cancellation_manager = app_module.cancellation_manager
                 self.trace_sink = None
-            def run(self, message, conversation_id=None, run_id=None, user_attachments=None):
+            def run(self, message, conversation_id=None, run_id=None, user_attachments=None, persist_message=None):
                 captured["message"] = message
                 captured["run_id"] = run_id
                 captured["attachments"] = user_attachments
+                captured["persist_message"] = persist_message
                 return {"content": "ok", "tool_calls_made": 0, "iterations": 1, "events": [], "cancelled": False}
         app_module.create_agent = lambda *a, **kw: FakeAgent(*a, **kw)
         try:

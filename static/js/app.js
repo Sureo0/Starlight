@@ -12,7 +12,6 @@
     const msgInput = $('#msgInput');
     const btnSend = $('#btnSend');
     const btnCancel = $('#btnCancel');
-    const btnAttach = $('#btnAttach');
     const fileInput = $('#fileInput');
     const attachBar = $('#attachBar');
     const inputArea = $('#inputArea');
@@ -368,30 +367,9 @@
             currentConvId = conv.id;
             chatTitle.textContent = conv.title;
             renderMessages(conv.messages);
-            renderConvFiles(conv.files);
             renderChatList();
             closeSidebar();
         } catch (e) { /* toast already shown */ }
-    }
-
-    // --- Conversation files (uploaded in this conversation) ---
-    function renderConvFiles(files) {
-        var el = document.getElementById('convFiles');
-        if (!el) return;
-        if (!files || !files.length) {
-            el.style.display = 'none';
-            el.innerHTML = '';
-            return;
-        }
-        el.style.display = 'block';
-        el.innerHTML = '<div class="conv-files-title">📁 本会话上传的文件</div>' +
-            '<div class="conv-files-list">' + files.map(function (f) {
-                var thumb = (f.kind === 'image')
-                    ? '<img class="attach-thumb" src="' + f.url + '" alt="">'
-                    : '<span>📄</span>';
-                return '<a class="conv-file-item" href="' + f.url + '" target="_blank" title="' + esc(f.name) + '">' +
-                    thumb + '<span class="attach-name">' + esc(f.name) + '</span></a>';
-            }).join('') + '</div>';
     }
 
     async function createConversation() {
@@ -402,7 +380,6 @@
             currentConvId = data.id;
             chatTitle.textContent = 'New Chat';
             renderMessages([]);
-            renderConvFiles([]);
             await loadConversations();
             closeSidebar();
         } catch (e) { /* toast already shown */ }
@@ -415,7 +392,6 @@
                 currentConvId = null;
                 chatTitle.textContent = 'New Chat';
                 renderMessages([]);
-                renderConvFiles([]);
             }
             await loadConversations();
         } catch (e) { /* toast already shown */ }
@@ -466,12 +442,36 @@
             return;
         }
         welcomeEl.style.display = 'none';
-        messagesEl.innerHTML = messages.map(m => `
-            <div class="msg ${m.role}">
-                <div class="msg-avatar">${m.role === 'user' ? 'You' : 'AI'}</div>
-                <div class="msg-body">${formatContent(m.content)}${attachmentsHtml(m.attachments)}</div>
-            </div>
-        `).join('');
+        messagesEl.innerHTML = messages.map(m => {
+            var body = formatContent(m.content) + attachmentsHtml(m.attachments);
+            // History reasoning (thinking process) is persisted in the DB and
+            // rendered as a collapsible block above the answer, matching the
+            // live-streaming reasoning block.
+            var reason = m.reasoning || m.reasoning_content;
+            if (m.role === 'assistant' && reason) {
+                body =
+                    '<div class="reasoning-block" data-rendered="1">' +
+                    '<div class="reasoning-header">💭 思考过程 <span class="reasoning-toggle">▾</span></div>' +
+                    '<div class="reasoning-content">' + formatContent(reason) + '</div>' +
+                    '</div>' + body;
+            }
+            return (
+                '<div class="msg ' + m.role + '">' +
+                '<div class="msg-avatar">' + (m.role === 'user' ? 'You' : 'AI') + '</div>' +
+                '<div class="msg-body">' + body + '</div>' +
+                '</div>'
+            );
+        }).join('');
+        // Wire up the collapsible headers for the rendered reasoning blocks.
+        messagesEl.querySelectorAll('.reasoning-block[data-rendered]').forEach(function (block) {
+            var header = block.querySelector('.reasoning-header');
+            var body = block.querySelector('.reasoning-content');
+            var toggle = header.querySelector('.reasoning-toggle');
+            header.addEventListener('click', function () {
+                var collapsed = body.classList.toggle('collapsed');
+                toggle.textContent = collapsed ? '▸' : '▾';
+            });
+        });
         scrollToBottom();
     }
 
@@ -503,6 +503,61 @@
         messagesEl.appendChild(div);
         scrollToBottom();
         return div;
+    }
+
+    // Model thinking process (reasoning_content): a collapsible block above
+    // the assistant answer. Clicking the header toggles the content.
+    // In streaming mode the reasoning is appended in real time while the
+    // model "thinks" (before the answer text arrives).
+    var activeReasoningEl = null;   // current reasoning block (streaming)
+    function getReasoningEl() {
+        if (activeReasoningEl && document.body.contains(activeReasoningEl)) return activeReasoningEl;
+        activeReasoningEl = null;
+        var div = document.createElement('div');
+        div.className = 'msg assistant';
+        div.innerHTML =
+            '<div class="msg-avatar">AI</div>' +
+            '<div class="msg-body"><div class="reasoning-block">' +
+            '<div class="reasoning-header">💭 思考过程 <span class="reasoning-toggle">▾</span></div>' +
+            '<div class="reasoning-content"></div>' +
+            '</div></div>';
+        div.querySelector('.reasoning-header').addEventListener('click', function () {
+            var body = div.querySelector('.reasoning-content');
+            var toggle = div.querySelector('.reasoning-toggle');
+            var collapsed = body.classList.toggle('collapsed');
+            toggle.textContent = collapsed ? '▸' : '▾';
+        });
+        // Insert before the typing indicator (or append)
+        var typing = document.getElementById('typingIndicator');
+        if (typing) messagesEl.insertBefore(div, typing);
+        else messagesEl.appendChild(div);
+        activeReasoningEl = div;
+        scrollToBottom();
+        return div;
+    }
+    function appendReasoningChunk(chunk) {
+        chunk = (chunk || '');
+        if (!chunk) return;
+        var el = getReasoningEl();
+        var body = el.querySelector('.reasoning-content');
+        body.textContent += chunk;
+        scrollToBottom();
+    }
+    function appendReasoning(reasoning) {
+        appendReasoningChunk(reasoning);
+    }
+
+    // Subtle one-line tool activity marker (streaming execution progress).
+    function appendToolActivity(line) {
+        var el = document.getElementById('toolActivity');
+        if (el) { el.textContent = line; scrollToBottom(); return; }
+        var div = document.createElement('div');
+        div.className = 'msg assistant';
+        div.innerHTML = '<div class="msg-avatar">AI</div><div class="msg-body"><div class="tool-activity" id="toolActivity">' + esc(line) + '</div></div>';
+        var typing = document.getElementById('typingIndicator');
+        if (typing) messagesEl.insertBefore(div, typing);
+        else messagesEl.appendChild(div);
+        scrollToBottom();
     }
 
     function showTyping() {
@@ -541,6 +596,15 @@
         btnSend.style.display = 'inline-flex';
         btnCancel.style.display = 'none';
     }
+    // Called when the run ends (any path): restore the composer and make
+    // sure the cancel button can never stay disabled for the next run.
+    function endRun() {
+        hideCancelBtn();
+        btnSend.disabled = false;
+        btnCancel.disabled = false;
+        btnCancel.title = '停止生成';
+        currentRunId = null;
+    }
 
     // --- Attachments (file/image upload) ---
     var pendingAttachments = [];  // {file_id, name, size, kind, ext, url}
@@ -563,6 +627,12 @@
             pendingAttachments = pendingAttachments.filter(function (a) { return a.file_id !== att.file_id; });
             chip.remove();
             if (pendingAttachments.length === 0) attachBar.style.display = 'none';
+            // Cancel upload: delete the file server-side so it doesn't linger
+            // in the conversation's file list ("本会话上传的文件" panel).
+            if (att.kind !== 'mount' && att.file_id) {
+                var delUrl = attachmentUrl(att);
+                if (delUrl) apiFetch(delUrl, { method: 'DELETE' }).catch(function () { /* non-fatal */ });
+            }
         });
         attachBar.appendChild(chip);
         attachBar.style.display = 'flex';
@@ -619,6 +689,7 @@
             if (currentRunMode === 'chat') {
                 // Plain chat: cancel directly (no confirmation).
                 btnCancel.disabled = true;
+                btnCancel.title = '正在停止…';
                 await apiFetch('/api/cancel', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -648,7 +719,22 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({}),
             });
-        } catch (e) { /* silent */ }
+        } catch (e) {
+            // The cancel request failed — restore the button so the user can
+            // try again. Never leave it grayed out while the run keeps going.
+            if (currentRunId) {
+                btnCancel.disabled = false;
+                btnCancel.title = '停止生成';
+            }
+        }
+    }
+
+    // True when `convId` is still the conversation currently on screen.
+    // Used to drop late-arriving stream events after the user switched to
+    // another conversation mid-run (the run keeps going server-side but its
+    // output must not overwrite the other conversation's UI).
+    function isCurrentConv(convId) {
+        return !convId || convId === currentConvId;
     }
 
     async function sendMessage(text) {
@@ -678,9 +764,16 @@
         attachBar.style.display = 'none';
 
         try {
-            var res = await apiFetch('/api/chat', {
+            // Fresh run: reset the streaming reasoning block so each message
+            // gets its own thinking section (never reuses the previous one).
+            activeReasoningEl = null;
+
+            // Use the SSE streaming endpoint: the model's reasoning is
+            // streamed in real time (before the answer), and tool progress
+            // events arrive as they happen.
+            var res = await fetch('/api/agent/stream', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
                 body: JSON.stringify({
                     conversation_id: currentConvId,
                     message: messageText,
@@ -688,37 +781,127 @@
                     attachments: attsToSend.map(function (a) { return { file_id: a.file_id, name: a.name, kind: a.kind || 'doc', conv_id: a.conv_id || null, ext: a.ext || '' }; }),
                 }),
             });
-            hideCancelBtn();
-            if (!res) { hideTyping(); return; }
-            var data = await res.json();
-            hideTyping();
+            // NOTE: the cancel button stays visible while the stream runs —
+            // it is hidden only when the run actually ends (done/cancelled/
+            // error/EOF). Hiding it here would make a long task (approval
+            // waits, sub-agents) impossible to cancel mid-flight.
+            if (!res) { endRun(); hideTyping(); return; }
+            if (!res.ok) {
+                endRun();
+                hideTyping();
+                try { var errData = await res.json(); appendMessage('assistant', 'Error: ' + (errData.error || res.status)); }
+                catch (e2) { appendMessage('assistant', 'Error: ' + res.status); }
+                return;
+            }
 
-            if (data.error) {
-                appendMessage('assistant', 'Error: ' + data.error);
-            } else {
-                currentConvId = data.conversation_id;
-                chatTitle.textContent = data.title || chatTitle.textContent;
-                if (data.cancelled) {
-                    appendMessage('assistant', data.content || '（已取消）');
-                    showToast('已停止生成');
-                } else if (data.vision_blocked) {
-                    appendMessage('assistant', data.content);
-                    showToast('当前大模型不支持多模态', 'warning');
-                } else {
-                    appendMessage('assistant', data.content);
+            // Track which conversation this run belongs to: if the user
+            // switches conversations mid-run, later events for this run are
+            // dropped (the other conversation's UI is not overwritten).
+            var runConvId = currentConvId;
+            var streamText = '';
+            var gotReasoning = false;
+            var answerEl = null;
+
+            var reader = res.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+            while (true) {
+                var chunk = await reader.read();
+                if (chunk.done) break;
+                buffer += decoder.decode(chunk.value, { stream: true });
+                var lines = buffer.split('\n');
+                buffer = lines.pop();
+                for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i];
+                    if (!line.startsWith('data: ')) continue;
+                    var payload = line.slice(6).trim();
+                    if (!payload) continue;
+                    var ev;
+                    try { ev = JSON.parse(payload); } catch (e3) { continue; }
+                    if (ev.type === 'start') {
+                        // Adopt the conversation id as soon as the server
+                        // creates it (new conversation, first message).
+                        if (ev.conversation_id && !runConvId) {
+                            currentConvId = ev.conversation_id;
+                        }
+                        continue;
+                    }
+                    if (ev.type === 'error') {
+                        if (isCurrentConv(runConvId)) appendMessage('assistant', 'Error: ' + (ev.content || 'unknown'));
+                        continue;
+                    }
+                    if (ev.type === 'reasoning') {
+                        if (isCurrentConv(runConvId)) {
+                            gotReasoning = true;
+                            appendReasoningChunk(ev.content || '');
+                        }
+                        continue;
+                    }
+                    if (ev.type === 'tool_call') {
+                        // Surface tool activity as its own subtle line
+                        // (separate from the model's reasoning text).
+                        if (isCurrentConv(runConvId)) {
+                            appendToolActivity('[工具] ' + (ev.tool || ''));
+                        }
+                        continue;
+                    }
+                    if (ev.type === 'text') {
+                        if (!isCurrentConv(runConvId)) continue;
+                        if (ev.conversation_id && !runConvId) {
+                            currentConvId = ev.conversation_id;
+                        }
+                        if (!answerEl) {
+                            hideTyping();
+                            answerEl = appendMessage('assistant', '');
+                        }
+                        streamText += ev.content || '';
+                        answerEl.querySelector('.msg-body').textContent = streamText;
+                        scrollToBottom();
+                        continue;
+                    }
+                    if (ev.type === 'done') {
+                        // Adopt the conversation id (first message of a new
+                        // conversation returns it in the done event).
+                        if (ev.conversation_id && !runConvId) {
+                            currentConvId = ev.conversation_id;
+                        }
+                        if (isCurrentConv(runConvId || currentConvId)) {
+                            hideTyping();
+                            if (answerEl && streamText) {
+                                // already rendered incrementally
+                            } else if (!answerEl) {
+                                answerEl = appendMessage('assistant', streamText || '（无内容）');
+                            }
+                            if (!gotReasoning && activeReasoningEl) activeReasoningEl = null;
+                        }
+                        break;
+                    }
+                    if (ev.type === 'cancelled') {
+                        if (isCurrentConv(runConvId)) {
+                            hideTyping();
+                            appendMessage('assistant', ev.content || '（已取消）');
+                            showToast('已停止生成');
+                        }
+                        break;
+                    }
                 }
+            }
+            // Final flush (in case the stream ended without a done event)
+            if (isCurrentConv(runConvId || currentConvId)) {
+                hideTyping();
+                if (!answerEl && streamText) appendMessage('assistant', streamText);
+                if (!gotReasoning && activeReasoningEl) activeReasoningEl = null;
                 await loadConversations();
             }
+            endRun();  // stream finished — restore composer, clear run id
         } catch (e) {
-            hideCancelBtn();
+            endRun();
             hideTyping();
             if (!e.message.includes('toast')) {
                 appendMessage('assistant', 'Request failed: ' + e.message);
             }
         }
 
-        btnSend.disabled = false;
-        currentRunId = null;
         // Clear attachment queue
         pendingAttachments = [];
         attachBar.innerHTML = '';
@@ -1208,21 +1391,52 @@
     // Chat
     btnSend.addEventListener('click', function () { sendMessage(); });
     btnCancel.addEventListener('click', function () { requestCancel(); });
-    btnAttach.addEventListener('click', function () { fileInput.click(); });
+    // "+" menu: attach / mount / skill (回形针和挂载按钮移入弹出菜单)
+    var btnPlus = document.getElementById('btnPlus');
+    var plusMenu = document.getElementById('plusMenu');
+    function togglePlusMenu(show) {
+        if (!plusMenu) return;
+        if (show === undefined) {
+            plusMenu.style.display = (plusMenu.style.display === 'none') ? 'block' : 'none';
+        } else {
+            plusMenu.style.display = show ? 'block' : 'none';
+        }
+    }
+    if (btnPlus) {
+        btnPlus.addEventListener('click', function (e) {
+            e.stopPropagation();
+            togglePlusMenu();
+        });
+    }
+    if (plusMenu) {
+        plusMenu.addEventListener('click', function (e) { e.stopPropagation(); });
+    }
+    document.addEventListener('click', function () { togglePlusMenu(false); });
+
+    var btnPlusAttach = document.getElementById('btnPlusAttach');
+    if (btnPlusAttach) {
+        btnPlusAttach.addEventListener('click', function () { togglePlusMenu(false); fileInput.click(); });
+    }
+    var btnPlusFolder = document.getElementById('btnPlusFolder');
+    if (btnPlusFolder) {
+        btnPlusFolder.addEventListener('click', function () { togglePlusMenu(false); openMountModal(); });
+    }
+    var btnPlusSkill = document.getElementById('btnPlusSkill');
+    if (btnPlusSkill) {
+        btnPlusSkill.addEventListener('click', function () { togglePlusMenu(false); openSkillModal(); });
+    }
     fileInput.addEventListener('change', function () {
         if (fileInput.files && fileInput.files.length) {
             addFilesToQueue(fileInput.files);
             fileInput.value = '';
         }
     });
-    var btnFolder = document.getElementById('btnFolder');
-    if (btnFolder) {
-        btnFolder.addEventListener('click', function () { openMountModal(); });
-    }
     wireDragDrop();
     msgInput.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
     msgInput.addEventListener('input', function () { autoResize(msgInput); });
-    $('#btnNewChat').addEventListener('click', createConversation);
+    // Resolve createConversation at CLICK time so wrapper logic (pending-skill
+    // save etc.) added later still applies.
+    $('#btnNewChat').addEventListener('click', function () { createConversation(); });
     $('#btnToggleSidebar').addEventListener('click', function () { $('#sidebar').classList.toggle('open'); });
 
     // User menu
@@ -1319,13 +1533,66 @@
     var approvalPollTimer = null;
     var knownApprovals = {};
 
+    // Per-card local countdown timer: the 3s server poll alone would update
+    // the remaining-time text only every 3 seconds. Each card keeps its own
+    // 1s interval so the countdown runs smoothly, and removes itself after
+    // the expiry passes (no ghost card left at 50% opacity).
+    var approvalTimers = {};  // req.id -> interval handle
+
+    function clearApprovalTimer(id) {
+        var t = approvalTimers[id];
+        if (t) { clearInterval(t); delete approvalTimers[id]; }
+    }
+
+    // Mark a card as expired and remove it after a short grace so the user
+    // sees the "已超时" state briefly instead of a silent disappearance.
+    function markApprovalExpired(card, id) {
+        clearApprovalTimer(id);
+        if (!card || card.__expired) return;
+        card.__expired = true;
+        card.classList.add('ap-done', 'ap-expiring');
+        var exp = card.querySelector('.ap-expires');
+        if (exp) exp.textContent = '已超时';
+        var acts = card.querySelector('.ap-actions');
+        if (acts) acts.style.display = 'none';
+        setTimeout(function () { removeApprovalCard(id); }, 2500);
+    }
+
+    function removeApprovalCard(id) {
+        clearApprovalTimer(id);
+        delete knownApprovals[id];
+        var el = document.getElementById('approval-' + id);
+        if (el) el.remove();
+    }
+
     function pollApprovals() {
         if (!currentUser) return;
         apiFetch('/api/approvals')
             .then(function (res) { return res ? res.json() : null; })
             .then(function (data) {
                 if (!data || !data.pending) return;
-                data.pending.forEach(renderApprovalCard);
+                var pendingIds = {};
+                data.pending.forEach(function (req) {
+                    pendingIds[req.id] = true;
+                    renderApprovalCard(req);
+                });
+                // Any card no longer pending (expired / auto-marked) is gone
+                // from the server — mark it expired and remove it (instead of
+                // leaving a faded ghost card behind).
+                Object.keys(knownApprovals).forEach(function (id) {
+                    if (!pendingIds[id]) {
+                        var old = document.getElementById('approval-' + id);
+                        if (old) {
+                            if (old.__decided) {
+                                // Already resolved by the user (approved /
+                                // rejected): it removes itself shortly.
+                                delete knownApprovals[id];
+                            } else {
+                                markApprovalExpired(old, id);
+                            }
+                        }
+                    }
+                });
             })
             .catch(function () { /* silent — polling is best-effort */ });
     }
@@ -1333,7 +1600,8 @@
     function renderApprovalCard(req) {
         var card = document.getElementById('approval-' + req.id);
         if (card) {
-            // Already rendered: update the countdown only
+            // Already rendered: re-sync the countdown (server expiry may
+            // drift; also refresh when a poll happens).
             updateApprovalExpiry(card, req);
             return;
         }
@@ -1366,25 +1634,49 @@
 
     function updateApprovalExpiry(card, req) {
         var exp = card.querySelector('.ap-expires');
-        if (!exp) return;
-        var left = req.expires_at ? (new Date(req.expires_at).getTime() - Date.now()) : 0;
+        if (!exp || !req.expires_at) return;
+        var deadline = new Date(req.expires_at).getTime();
+        var left = deadline - Date.now();
         if (left <= 0) {
-            exp.textContent = '已超时';
-            card.classList.add('ap-done');
-        } else {
-            exp.textContent = '等待确认… ' + Math.ceil(left / 1000) + 's 后超时';
+            markApprovalExpired(card, req.id);
+            return;
         }
+        // Local 1s ticker: smooth countdown between server polls.
+        clearApprovalTimer(req.id);
+        exp.textContent = '等待确认… ' + Math.ceil(left / 1000) + 's 后超时';
+        approvalTimers[req.id] = setInterval(function () {
+            if (!document.getElementById('approval-' + req.id)) {
+                // Card is gone (resolved/removed) — stop ticking.
+                clearApprovalTimer(req.id);
+                return;
+            }
+            var rem = deadline - Date.now();
+            if (rem <= 0) {
+                markApprovalExpired(card, req.id);
+                return;
+            }
+            exp.textContent = '等待确认… ' + Math.ceil(rem / 1000) + 's 后超时';
+        }, 1000);
     }
 
     function decideApproval(reqId, action, card) {
-        apiFetch('/api/approvals/' + reqId + '/' + action, {
+        // Use raw fetch (not apiFetch) so a 4xx response body (with the
+        // backend's message, e.g. "该请求已处理（expired）") reaches the UI
+        // instead of a generic "Request failed (400)".
+        fetch('/api/approvals/' + reqId + '/' + action, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
             body: JSON.stringify(action === 'reject' ? { reason: '用户拒绝' } : {}),
         })
-            .then(function (res) { return res ? res.json() : null; })
-            .then(function (data) {
-                if (data && data.ok) {
+            .then(function (res) {
+                return res.json().catch(function () { return {}; }).then(function (data) {
+                    return { ok: res.ok, data: data };
+                });
+            })
+            .then(function (r) {
+                var data = r.data || {};
+                if (r.ok && data.ok) {
+                    card.__decided = true;  // user resolved it — not "expired"
                     card.classList.add('ap-done');
                     card.querySelector('.ap-actions').style.display = 'none';
                     card.querySelector('.ap-expires').textContent =
@@ -1393,12 +1685,9 @@
                             : '✗ 已拒绝，本次任务内不再询问';
                     // The paused agent resumes on its own; re-render after
                     // it continues (the request leaves 'pending').
-                    setTimeout(function () {
-                        var c = document.getElementById('approval-' + reqId);
-                        if (c) c.remove();
-                    }, 6000);
-                } else if (data && data.message) {
-                    showToast(data.message);
+                    setTimeout(function () { removeApprovalCard(reqId); }, 6000);
+                } else {
+                    showToast(data.message || data.error || '审批操作失败');
                 }
             })
             .catch(function (e) {
@@ -1419,7 +1708,14 @@
     var mountPathInput = document.getElementById('mountPath');
     var mountListEl = document.getElementById('mountList');
 
+    // Pending mounts chosen BEFORE a conversation exists (预选挂载). Once a
+    // new conversation is created they are bound to it automatically (see
+    // createConversation wrapper) — same pattern as pending skills.
+    var pendingMounts = [];  // [{path, policy}]
+
     function openMountModal() {
+        // Mounts may be preselected without a conversation: the modal opens
+        // in "预选" mode and binds to the next created conversation.
         mountModal.classList.add('active');
         loadMountList();
         setTimeout(function () { mountPathInput.focus(); }, 100);
@@ -1428,40 +1724,72 @@
 
     async function loadMountList() {
         if (!mountListEl) return;
+        var html = '';
+        // Pending (preselected) mounts are shown first — they bind to the
+        // next conversation the user creates.
+        if (pendingMounts.length) {
+            pendingMounts.forEach(function (pm, i) {
+                var name = pm.name || (pm.path.split(/[\\\/]/).pop() || pm.path);
+                html +=
+                    '<div class="mount-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px dashed var(--border);border-radius:8px;margin-bottom:6px;background:rgba(99,102,241,0.06);">' +
+                    '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+                    '📁 <b>' + esc(name) + '</b> <span style="color:#94a3b8;font-size:0.8rem;">' + esc(pm.path) + '</span>' +
+                    '<span style="margin-left:6px;font-size:0.7rem;padding:1px 6px;border-radius:6px;background:rgba(99,102,241,0.15);color:#6366f1;">预选·待绑定</span></span>' +
+                    '<button class="btn-sm" style="flex-shrink:0;color:#dc2626;" data-pending="' + i + '">移除</button></div>';
+            });
+        }
+        if (!currentConvId) {
+            // No conversation: show pending mounts + a hint. Creating a new
+            // conversation binds the pending ones automatically.
+            mountListEl.innerHTML = html ||
+                '<div class="mount-empty" style="color:#94a3b8;font-size:0.85rem;">尚未选择对话 — 挂载的文件夹将作为预选，新建对话后自动绑定</div>';
+            wirePendingRemove();
+            return;
+        }
         try {
-            var res = await apiFetch('/api/mounts');
+            var url = '/api/mounts?conv_id=' + encodeURIComponent(currentConvId);
+            var res = await apiFetch(url);
             if (!res) return;
             var data = await res.json();
             var mounts = data.mounts || [];
-            mountListEl.innerHTML = '';
-            if (!mounts.length) {
-                mountListEl.innerHTML = '<div class="mount-empty" style="color:#94a3b8;font-size:0.85rem;">尚未挂载任何文件夹</div>';
+            if (!mounts.length && !html) {
+                mountListEl.innerHTML = '<div class="mount-empty" style="color:#94a3b8;font-size:0.85rem;">本对话尚未挂载文件夹</div>';
                 return;
             }
+            var rows = html;
             mounts.forEach(function (m) {
-                var row = document.createElement('div');
-                row.className = 'mount-row';
-                row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;';
                 var policyLabel = m.policy === 'allow' ? '同任务内允许' : '总是询问';
-                row.innerHTML =
+                rows +=
+                    '<div class="mount-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">' +
                     '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
                     '📁 <b>' + esc(m.name) + '</b> <span style="color:#94a3b8;font-size:0.8rem;">' + esc(m.path) + '</span>' +
                     '<span style="margin-left:6px;font-size:0.7rem;padding:1px 6px;border-radius:6px;background:' + (m.policy === 'allow' ? 'rgba(34,197,94,0.12);color:#16a34a;' : 'rgba(99,102,241,0.12);color:#6366f1;') + '">' + policyLabel + '</span></span>' +
                     '<button class="btn-sm" style="flex-shrink:0;" data-mid="' + esc(m.id) + '">使用</button>' +
-                    '<button class="btn-sm" style="flex-shrink:0;color:#dc2626;" data-mid="' + esc(m.id) + '">卸载</button>';
-                row.querySelectorAll('button').forEach(function (btn) {
-                    btn.addEventListener('click', function () {
-                        var mid = btn.getAttribute('data-mid');
-                        if (btn.textContent.trim() === '卸载') {
-                            unmountFolder(mid);
-                        } else {
-                            useMount(mid);
-                        }
-                    });
+                    '<button class="btn-sm" style="flex-shrink:0;color:#dc2626;" data-mid="' + esc(m.id) + '">卸载</button></div>';
+            });
+            mountListEl.innerHTML = rows;
+            wirePendingRemove();
+            mountListEl.querySelectorAll('button[data-mid]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var mid = btn.getAttribute('data-mid');
+                    if (btn.textContent.trim() === '卸载') {
+                        unmountFolder(mid);
+                    } else {
+                        useMount(mid);
+                    }
                 });
-                mountListEl.appendChild(row);
             });
         } catch (e) { /* silent */ }
+    }
+
+    function wirePendingRemove() {
+        mountListEl.querySelectorAll('button[data-pending]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var i = parseInt(btn.getAttribute('data-pending'), 10);
+                if (!isNaN(i) && pendingMounts[i]) pendingMounts.splice(i, 1);
+                loadMountList();
+            });
+        });
     }
 
     function unmountFolder(mid) {
@@ -1479,13 +1807,13 @@
     }
 
     function useMount(mid) {
-        var mount = null;
-        apiFetch('/api/mounts')
+        if (!currentConvId) { showToast('请先选择或新建对话'); return; }
+        apiFetch('/api/mounts?conv_id=' + encodeURIComponent(currentConvId))
             .then(function (res) { return res ? res.json() : null; })
             .then(function (data) {
                 if (!data) return;
-                mount = (data.mounts || []).find(function (m) { return m.id === mid; });
-                if (!mount) { showToast('挂载不存在'); return; }
+                var mount = (data.mounts || []).find(function (m) { return m.id === mid; });
+                if (!mount) { showToast('该挂载不属于当前对话，请重新挂载'); return; }
                 if (pendingAttachments.length >= 8) { showToast('最多同时上传 8 个附件'); return; }
                 var att = { file_id: mount.id, name: mount.name, size: 0, kind: 'mount', ext: '', url: null };
                 pendingAttachments.push(att);
@@ -1517,16 +1845,27 @@
 
     function doMountWithPolicy(policy) {
         if (!pendingMountPath) return;
+        // No conversation yet: keep the mount as a PRESELECTION (预选). It is
+        // bound to the conversation the user creates next (see the
+        // createConversation wrapper) — mirroring pending-skill behavior.
+        if (!currentConvId) {
+            pendingMounts.push({ path: pendingMountPath, policy: policy, name: pendingMountPath.split(/[\\\/]/).pop() || pendingMountPath });
+            closeMountConfirm();
+            mountPathInput.value = '';
+            loadMountList();
+            showToast('已预选文件夹，新建对话后将自动挂载', 'success');
+            return;
+        }
         apiFetch('/api/mounts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: pendingMountPath, policy: policy }),
+            body: JSON.stringify({ path: pendingMountPath, policy: policy, conv_id: currentConvId }),
         })
             .then(function (res) { return res ? res.json() : null; })
             .then(function (data) {
                 closeMountConfirm();
                 if (data && data.ok) {
-                    showToast('已挂载: ' + data.mount.name, 'success');
+                    showToast('已挂载到当前对话: ' + data.mount.name, 'success');
                     mountPathInput.value = '';
                     loadMountList();
                 } else {
@@ -1618,15 +1957,195 @@
 
     // ============================================================
     // Chat section collapse (会话记录 展开/收起)
-    // "Chat" label + ">" arrow form ONE clickable toggle: default expanded;
-    // clicking anywhere on it (text or arrow) toggles the conversation list.
+    // The WHOLE header row is clickable: clicking anywhere on it toggles
+    // the conversation list.
     // ============================================================
     var chatSection = document.getElementById('chatSection');
-    var btnChatToggle = document.getElementById('btnChatToggle');
-    if (chatSection && btnChatToggle) {
-        btnChatToggle.addEventListener('click', function () {
+    var chatSectionHeader = document.getElementById('chatSectionHeader');
+    if (chatSection && chatSectionHeader) {
+        chatSectionHeader.addEventListener('click', function () {
             chatSection.classList.toggle('collapsed');
         });
+    }
+
+    // ============================================================
+    // Skills (技能): attach skills to the current conversation
+    // ============================================================
+    var currentSkills = [];  // skill names attached to currentConvId
+
+    async function loadSkillsForConv(convId) {
+        if (!convId) { currentSkills = []; renderSkillBar(); return; }
+        try {
+            var res = await apiFetch('/api/conversations/' + convId);
+            if (!res) return;
+            var conv = await res.json();
+            currentSkills = conv.skills || [];
+            renderSkillBar();
+        } catch (e) { currentSkills = []; renderSkillBar(); }
+    }
+
+    function openSkillModal() {
+        // Skills may be chosen BEFORE a conversation exists — the pending
+        // selection is saved to the conversation once one is created/selected.
+        document.getElementById('skillModal').classList.add('active');
+        loadSkillList();
+    }
+    function closeSkillModal() {
+        document.getElementById('skillModal').classList.remove('active');
+    }
+
+    async function loadSkillList() {
+        var listEl = document.getElementById('skillList');
+        if (!listEl) return;
+        listEl.innerHTML = '<div style="color:#94a3b8;font-size:0.85rem;">加载中…</div>';
+        var res = await apiFetch('/api/skills');
+        if (!res) return;
+        var data = await res.json();
+        var skills = data.skills || [];
+        if (!skills.length) {
+            listEl.innerHTML = '<div style="color:#94a3b8;font-size:0.85rem;">暂无可用技能<br>在 skills/ 目录下新建技能文件夹(SKILL.md)</div>';
+            return;
+        }
+        listEl.innerHTML = '';
+        skills.forEach(function (s) {
+            var on = currentSkills.indexOf(s.name) >= 0;
+            var item = document.createElement('div');
+            item.className = 'skill-item' + (on ? ' selected' : '');
+            item.innerHTML =
+                '<div class="skill-item-info">' +
+                '<div class="skill-item-name">' + esc(s.name) + '</div>' +
+                '<div class="skill-item-desc">' + esc(s.description || '') + '</div>' +
+                '</div>' +
+                '<span class="skill-item-check">' + (on ? '✓' : '') + '</span>';
+            item.addEventListener('click', function () {
+                var idx = currentSkills.indexOf(s.name);
+                if (idx >= 0) currentSkills.splice(idx, 1);
+                else currentSkills.push(s.name);
+                saveSkills();
+            });
+            listEl.appendChild(item);
+        });
+    }
+
+    async function saveSkills() {
+        // No conversation yet: keep the selection locally; it is saved once a
+        // conversation is created/selected (see createConversation).
+        if (!currentConvId) {
+            renderSkillBar();
+            loadSkillList();
+            return;
+        }
+        try {
+            var res = await apiFetch('/api/conversations/' + currentConvId + '/skills', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ skills: currentSkills }),
+            });
+            if (!res) return;
+            var data = await res.json();
+            currentSkills = data.skills || [];
+            renderSkillBar();
+            loadSkillList();
+            var n = currentSkills.length;
+            showToast(n ? ('已添加 ' + n + ' 个技能') : '已清空技能', 'success');
+        } catch (e) { /* toast already shown */ }
+    }
+
+    function renderSkillBar() {
+        var bar = document.getElementById('skillBar');
+        if (!bar) return;
+        if (!currentSkills.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+        bar.style.display = 'flex';
+        bar.innerHTML = currentSkills.map(function (name) {
+            return '<span class="skill-chip">✨ ' + esc(name) + '</span>';
+        }).join('');
+    }
+
+    // Skill modal bindings
+    var btnSkillModal = document.getElementById('skillModal');
+    document.getElementById('btnCloseSkill').addEventListener('click', closeSkillModal);
+    document.getElementById('btnCancelSkill').addEventListener('click', closeSkillModal);
+    if (btnSkillModal) {
+        btnSkillModal.addEventListener('click', function (e) { if (e.target === e.currentTarget) closeSkillModal(); });
+    }
+
+    // Pending attachments (files, images, mounts) and skills are
+    // conversation-scoped: switching conversations clears them — they must be
+    // re-selected in the new conversation. Uploaded files stay on the server
+    // (they belong to the conversation they were uploaded in) but leave the
+    // composer.
+    var _origLoadConversation = loadConversation;
+    loadConversation = function (id) {
+        loadSkillsForConv(id);
+        purgePendingAttachments();
+        return _origLoadConversation(id);
+    };
+    var _origCreateConversation = createConversation;
+    createConversation = function () {
+        var hadPendingSkills = currentSkills.length > 0;
+        var pendingSkillsCopy = currentSkills.slice();
+        // Preselected mounts bind to the new conversation (same pattern).
+        var hadPendingMounts = pendingMounts.length > 0;
+        var pendingMountsCopy = pendingMounts.slice();
+        purgePendingAttachments();
+        var p = _origCreateConversation();
+        // Save skills chosen before the conversation existed
+        if (hadPendingSkills) {
+            p.then(function () {
+                currentSkills = pendingSkillsCopy;
+                return saveSkills();
+            }).catch(function () { /* no-op */ });
+        }
+        // Bind preselected mounts to the newly created conversation
+        if (hadPendingMounts) {
+            p.then(function () {
+                return bindPendingMounts(pendingMountsCopy);
+            }).catch(function () { /* no-op */ });
+        }
+        return p;
+    };
+
+    // POST each preselected mount to the new conversation; on success the
+    // preselection is cleared (failures are surfaced per-mount and kept).
+    function bindPendingMounts(mountsCopy) {
+        var results = mountsCopy.map(function () { return false; });  // per-index success
+        var chain = Promise.resolve();
+        mountsCopy.forEach(function (pm, idx) {
+            chain = chain.then(function () {
+                return apiFetch('/api/mounts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: pm.path, policy: pm.policy, conv_id: currentConvId }),
+                }).then(function (res) {
+                    if (!res) return;
+                    return res.json().then(function (data) {
+                        if (data && data.ok) results[idx] = true;
+                    });
+                }).catch(function () { /* failed — stays false */ });
+            });
+        });
+        return chain.then(function () {
+            var succeeded = results.filter(Boolean).length;
+            if (succeeded === mountsCopy.length) {
+                pendingMounts = [];
+                showToast('已挂载 ' + succeeded + ' 个预选文件夹', 'success');
+            } else {
+                // Keep only the failed ones pending for a retry.
+                pendingMounts = pendingMounts.filter(function (pm, i) {
+                    return i < results.length && !results[i];
+                });
+                var failedN = mountsCopy.length - succeeded;
+                showToast('预选挂载部分失败（' + failedN + '/' + mountsCopy.length + '），可重新挂载');
+            }
+            loadMountList();
+        });
+    }
+
+    function purgePendingAttachments() {
+        if (!pendingAttachments.length) return;
+        pendingAttachments = [];
+        attachBar.innerHTML = '';
+        attachBar.style.display = 'none';
     }
 
     // ============================================================

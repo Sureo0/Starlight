@@ -13,8 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Generator
@@ -24,6 +26,10 @@ from agent.tools.base import Tool, ToolResult
 from agent.tools.registry import ToolRegistry
 from agent.memory.context_manager import ContextManager, sanitize_tool_roundtrips
 from agent.security.permissions import ToolPermission, PermissionLevel
+
+
+class _CancelledError(Exception):
+    """Raised when a user cancellation interrupts a long LLM call."""
 from agent.security.rate_limiter import RateLimiter, RateLimitConfig
 from agent.security.validator import InputValidator, ValidatorConfig
 
@@ -122,6 +128,7 @@ class AgentConfig:
     tools_enabled: bool = True  # Whether to enable tool calling
     tool_choice: str | dict = "auto"  # "auto", "none", "required"
     use_prompt_tool_calls: bool = False  # Force prompt-based mode
+    skills_dir: str | None = None  # Folder with per-conversation skills (SKILL.md)
 
     # Security settings
     security_enabled: bool = True  # Enable security checks
@@ -195,7 +202,7 @@ class AgentConfig:
 class AgentEvent:
     """An event produced during agent execution."""
 
-    type: str  # "thinking", "tool_call", "tool_result", "text", "done", "error"
+    type: str  # "thinking", "tool_call", "tool_result", "text", "reasoning", "done", "error"
     content: str = ""
     tool_name: str = ""
     tool_args: dict = field(default_factory=dict)
@@ -255,6 +262,9 @@ class AgentOrchestrator:
         self.config = config or AgentConfig()
         self.db = db
         self.username = username or "anonymous"
+        # Skills directory (per-conversation skill injection). Stored on the
+        # instance so tests can set it directly; config.skills_dir is the default.
+        self.skills_dir = getattr(self.config, "skills_dir", None)
         self.context = ContextManager(max_tokens=self.config.context_window)
         # Context compression: summarizes older messages via the LLM when the
         # history exceeds the trigger threshold. Fail-soft: if the summarizer
@@ -342,6 +352,36 @@ class AgentOrchestrator:
             return mgr.should_stop(self.current_run_id)
         except Exception:
             return False
+
+    def _call_llm_cancellable(self, **kwargs):
+        """Call self.llm.chat in a daemon thread so a user cancellation can
+        interrupt a long-running LLM call (deep-reasoning models "think" for
+        minutes inside the HTTP request — the main loop can't reach its
+        cancellation checkpoint until the call returns).
+
+        Polls the cancellation manager while the call runs; on cancel, the
+        pending LLM call is abandoned and a _CancelledError is raised. The
+        abandoned thread is daemon — its response is simply never used.
+        """
+        result_holder: dict = {}
+        ready = threading.Event()
+
+        def _worker():
+            try:
+                result_holder["response"] = self.llm.chat(**kwargs)
+            except Exception as e:
+                result_holder["error"] = e
+            finally:
+                ready.set()
+
+        worker = threading.Thread(target=_worker, daemon=True)
+        worker.start()
+        while not ready.wait(timeout=0.5):
+            if self._cancel_requested():
+                raise _CancelledError("cancelled during LLM call")
+        if "error" in result_holder:
+            raise result_holder["error"]
+        return result_holder["response"]
 
     def _cancel_status(self) -> str | None:
         """Current cancellation status for this run (for events/traces)."""
@@ -524,7 +564,12 @@ class AgentOrchestrator:
                     args={"request_id": req_id, "status": "pending"},
                     detail=f"请求人工确认 #{req_id}（{name}）",
                 ))
-            status = manager.wait_for_decision(req_id, timeout=self.config.approval_expiry)
+            status = manager.wait_for_decision(
+                req_id, timeout=self.config.approval_expiry,
+                # A user cancellation must stay responsive while the run is
+                # paused on this approval: poll it alongside the decision.
+                should_stop=self._cancel_requested,
+            )
 
             if self.trace_recorder:
                 from agent.observability.trace_recorder import TraceEvent
@@ -584,6 +629,7 @@ class AgentOrchestrator:
         run_id: str | None = None,
         user_attachments: list | None = None,
         persist_message: str | None = None,
+        clear_cancel_on_finish: bool = True,
     ) -> dict:
         """
         Execute the agent loop for a user message.
@@ -598,17 +644,25 @@ class AgentOrchestrator:
                     the conversation history (e.g. the user's raw input when
                     user_message carries generated attachment descriptions).
                     Defaults to user_message.
+            clear_cancel_on_finish: False when this run shares a parent's
+                    run_id (sub-agents) — the child must NOT clear the parent's
+                    cancellation request on exit, or the parent would lose the
+                    user's cancel signal after the child stops.
 
         Returns:
             dict with keys: "content", "tool_calls_made", "iterations", "events", "mode"
         """
         # Per-run approval memory: fresh decisions for every new task
         self._reset_approval_memory()
+        # User-message persistence is idempotent per run (finally persists it
+        # even on failed runs — see _persist_user_message).
+        self._user_msg_persisted = False
 
         # Cancellation: unique id for this run (front-end can cancel it)
         self.current_run_id = run_id or self._new_run_id()
         self._current_attachments = None
         self._persist_message = persist_message or user_message
+        self._current_conv_id = conversation_id
 
         events: list[AgentEvent] = []
         tool_calls_made = 0
@@ -695,8 +749,12 @@ class AgentOrchestrator:
             # --- Security: Release concurrent slot ---
             if self.config.security_enabled and self.config.rate_limit_enabled:
                 self._rate_limiter.release_concurrent()
+            # The user message must survive EVERY exit path — including failed
+            # runs (approval timeouts, loop guards, errors). Without this a
+            # failed run left no user message in history at all.
+            self._persist_user_message(conversation_id, user_message)
             # Cancellation: drop the request so a finished run can't be cancelled
-            if self.cancellation_manager is not None and self.current_run_id:
+            if clear_cancel_on_finish and self.cancellation_manager is not None and self.current_run_id:
                 try:
                     self.cancellation_manager.clear(self.current_run_id)
                 except Exception:
@@ -871,10 +929,11 @@ class AgentOrchestrator:
             # Determine force_mode
             force_mode = "prompt" if self.config.use_prompt_tool_calls else None
 
-            # Call LLM
+            # Call LLM (cancellable: a user cancel aborts a long reasoning
+            # call instead of waiting for it to finish)
             try:
                 _llm_start = time.time()
-                response = self.llm.chat(
+                response = self._call_llm_cancellable(
                     messages=messages,
                     tools=tool_schemas,
                     tool_choice=self.config.tool_choice if tool_schemas else "none",
@@ -889,6 +948,23 @@ class AgentOrchestrator:
                         duration=time.time() - _llm_start,
                         iteration=iteration + 1,
                     )
+            except _CancelledError:
+                # User cancelled while the model was "thinking" — abort as a
+                # clean cancellation (not an error).
+                logger.info("[conv=%s] LLM call cancelled by user at iteration %d", conversation_id or "new", iteration + 1)
+                events.append(AgentEvent(type="cancelled", content="用户取消了任务", iteration=iteration + 1))
+                self._trace_finish(
+                    "cancelled", "用户取消了任务", success=False, content="用户取消了任务",
+                    tool_calls_made=tool_calls_made, iterations=iteration + 1,
+                )
+                return {
+                    "content": "用户取消了任务",
+                    "tool_calls_made": tool_calls_made,
+                    "iterations": iteration + 1,
+                    "events": [e.to_dict() for e in events],
+                    "mode": last_mode,
+                    "cancelled": True,
+                }
             except Exception as e:
                 logger.exception("LLM call failed at iteration %d", iteration + 1)
                 if self.trace_recorder:
@@ -915,14 +991,22 @@ class AgentOrchestrator:
                     content=response.content,
                     iteration=iteration + 1,
                 ))
+                # Emit the model's reasoning/thinking content (if any) as a
+                # separate event so the UI can display the thinking process.
+                if getattr(response, "reasoning", ""):
+                    events.append(AgentEvent(
+                        type="reasoning",
+                        content=response.reasoning,
+                        iteration=iteration + 1,
+                    ))
 
                 # Persist to database
+                self._persist_user_message(conversation_id, user_message)
                 if conversation_id and self.db:
                     self.db.add_message(
-                        conversation_id, "user", self._persist_message or user_message,
-                        attachments=self._current_attachments,
+                        conversation_id, "assistant", response.content,
+                        reasoning=getattr(response, "reasoning", "") or None,
                     )
-                    self.db.add_message(conversation_id, "assistant", response.content)
 
                 # Post-turn: automatic long-term memory extraction
                 self._maybe_extract_memories(
@@ -936,6 +1020,7 @@ class AgentOrchestrator:
                 )
                 return {
                     "content": response.content,
+                    "reasoning": getattr(response, "reasoning", ""),
                     "tool_calls_made": tool_calls_made,
                     "iterations": iteration + 1,
                     "events": [e.to_dict() for e in events],
@@ -952,12 +1037,18 @@ class AgentOrchestrator:
                     # No valid tool calls — treat as text response
                     content = response.content or "我没有找到需要调用的工具。"
                     events.append(AgentEvent(type="text", content=content, iteration=iteration + 1))
+                    if getattr(response, "reasoning", ""):
+                        events.append(AgentEvent(
+                            type="reasoning",
+                            content=response.reasoning,
+                            iteration=iteration + 1,
+                        ))
+                    self._persist_user_message(conversation_id, user_message)
                     if conversation_id and self.db:
                         self.db.add_message(
-                            conversation_id, "user", self._persist_message or user_message,
-                            attachments=self._current_attachments,
+                            conversation_id, "assistant", content,
+                            reasoning=getattr(response, "reasoning", "") or None,
                         )
-                        self.db.add_message(conversation_id, "assistant", content)
 
                     # Post-turn: automatic long-term memory extraction
                     self._maybe_extract_memories(
@@ -1246,12 +1337,12 @@ class AgentOrchestrator:
                     iteration=iteration + 1,
                 )
             events.append(AgentEvent(type="error", content=content))
+            self._persist_user_message(conversation_id, user_message)
             if conversation_id and self.db:
                 self.db.add_message(
-                    conversation_id, "user", self._persist_message or user_message,
-                    attachments=self._current_attachments,
+                    conversation_id, "assistant", content,
+                    reasoning=getattr(response, "reasoning", "") or None,
                 )
-                self.db.add_message(conversation_id, "assistant", content)
 
             # Post-turn: automatic long-term memory extraction
             self._maybe_extract_memories(user_message, content, conversation_id)
@@ -1310,11 +1401,15 @@ class AgentOrchestrator:
         """
         # Per-run approval memory: fresh decisions for every new task
         self._reset_approval_memory()
+        # User-message persistence is idempotent per run (finally persists it
+        # even on failed runs — see _persist_user_message).
+        self._user_msg_persisted = False
 
         # Cancellation: unique id for this run (front-end can cancel it)
         self.current_run_id = run_id or self._new_run_id()
         self._current_attachments = None
         self._persist_message = persist_message or user_message
+        self._current_conv_id = conversation_id
 
         # --- Observability: create recorder for this run ---
         # (Sub-agent runs attach their own recorder; only top-level runs
@@ -1369,6 +1464,10 @@ class AgentOrchestrator:
         finally:
             if acquired and self.config.rate_limit_enabled:
                 self._rate_limiter.release_concurrent()
+            # The user message must survive EVERY exit path — including failed
+            # streams (approval timeouts, loop guards, errors). Without this a
+            # failed run left no user message in history at all.
+            self._persist_user_message(conversation_id, user_message)
             if self.cancellation_manager is not None and self.current_run_id:
                 try:
                     self.cancellation_manager.clear(self.current_run_id)
@@ -1510,7 +1609,7 @@ class AgentOrchestrator:
 
             try:
                 _llm_start = time.time()
-                response = self.llm.chat(
+                response = self._call_llm_cancellable(
                     messages=messages,
                     tools=tool_schemas,
                     tool_choice=self.config.tool_choice if tool_schemas else "none",
@@ -1525,6 +1624,17 @@ class AgentOrchestrator:
                         duration=time.time() - _llm_start,
                         iteration=iteration + 1,
                     )
+            except _CancelledError:
+                # User cancelled while the model was "thinking" — abort as a
+                # clean cancellation (not an error).
+                logger.info("[conv=%s] LLM call cancelled by user (stream)", conversation_id or "new")
+                if self.trace_recorder:
+                    self._trace_finish(
+                        "cancelled", "用户取消了任务", success=False, content="用户取消了任务",
+                        iterations=iteration + 1,
+                    )
+                yield {"type": "cancelled", "content": "用户取消了任务"}
+                return
             except Exception as e:
                 if self.trace_recorder:
                     self.trace_recorder.report_error(
@@ -1539,14 +1649,16 @@ class AgentOrchestrator:
                 return
 
             if response.type == "text":
+                if getattr(response, "reasoning", ""):
+                    yield {"type": "reasoning", "content": response.reasoning}
                 yield {"type": "text", "content": response.content}
 
+                self._persist_user_message(conversation_id, user_message)
                 if conversation_id and self.db:
                     self.db.add_message(
-                        conversation_id, "user", self._persist_message or user_message,
-                        attachments=self._current_attachments,
+                        conversation_id, "assistant", response.content,
+                        reasoning=getattr(response, "reasoning", "") or None,
                     )
-                    self.db.add_message(conversation_id, "assistant", response.content)
 
                 # Post-turn: automatic long-term memory extraction
                 self._maybe_extract_memories(
@@ -1562,6 +1674,10 @@ class AgentOrchestrator:
                 return
 
             if response.type == "tool_use" and response.has_tool_calls:
+                # Emit the model's reasoning (thinking before using tools)
+                if getattr(response, "reasoning", ""):
+                    yield {"type": "reasoning", "content": response.reasoning}
+
                 # Filter out empty/invalid tool calls
                 valid_calls = [
                     tc for tc in response.tool_calls
@@ -1570,12 +1686,12 @@ class AgentOrchestrator:
                 if not valid_calls:
                     content = response.content or "我没有找到需要调用的工具。"
                     yield {"type": "text", "content": content}
+                    self._persist_user_message(conversation_id, user_message)
                     if conversation_id and self.db:
                         self.db.add_message(
-                            conversation_id, "user", self._persist_message or user_message,
-                            attachments=self._current_attachments,
+                            conversation_id, "assistant", content,
+                            reasoning=getattr(response, "reasoning", "") or None,
                         )
-                        self.db.add_message(conversation_id, "assistant", content)
 
                     # Post-turn: automatic long-term memory extraction
                     self._maybe_extract_memories(
@@ -1811,6 +1927,35 @@ class AgentOrchestrator:
             logger.warning("Context compression failed (continuing untruncated): %s", e)
             return messages
 
+    def _build_skills_block(self, skill_names: list) -> str:
+        """Load the SKILL.md contents for the given skill names and build a
+        system block. Missing skills are skipped; empty result returns ""."""
+        if not skill_names or not self.skills_dir:
+            return ""
+        try:
+            base = Path(self.skills_dir)
+            blocks = []
+            for name in skill_names:
+                name = str(name or "").strip()
+                if not name:
+                    continue
+                # Safe join: no path traversal
+                folder = (base / name).resolve()
+                if not str(folder).startswith(str(base.resolve())):
+                    continue
+                skill_file = folder / "SKILL.md"
+                if not skill_file.is_file():
+                    continue
+                content = skill_file.read_text(encoding="utf-8", errors="replace").strip()
+                if content:
+                    blocks.append(f"=== Skill: {name} ===\n{content}")
+            if not blocks:
+                return ""
+            return "\n\n".join(blocks)
+        except Exception as e:
+            logger.warning("Failed to load skill block: %s", e)
+            return ""
+
     def _build_initial_messages(
         self, user_message: str, conversation_id: str | None,
         user_attachments: list | None = None,
@@ -1825,6 +1970,19 @@ class AgentOrchestrator:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         system_prompt = self.config.system_prompt.replace("{current_date_time}", now)
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
+
+        # Conversation skills: SKILL.md contents attached to this conversation
+        # are injected as an additional system message (before memory/history).
+        if conversation_id and self.db:
+            try:
+                conv = self.db.get_conversation(conversation_id)
+                skill_names = conv.get("skills") if conv else None
+                if skill_names:
+                    block = self._build_skills_block(skill_names)
+                    if block:
+                        messages.append({"role": "system", "content": block})
+            except Exception as e:
+                logger.warning("Skill injection failed: %s", e)
 
         # Long-term memory injection: retrieve relevant memories and add them
         # as a second system message so the model can reference them.
@@ -1894,6 +2052,35 @@ class AgentOrchestrator:
         # fitted[0] is the system prompt; keep memory injection as system too
         messages.extend(fitted[1:] if len(fitted) > 1 else [])
         return messages
+
+    def _persist_user_message(
+        self, conversation_id: str | None, user_message: str
+    ) -> None:
+        """Persist the user's message once per run (idempotent).
+
+        Called from run()/run_stream()'s finally block so the message survives
+        EVERY run exit — including failed ones (approval timeouts, loop
+        guards, errors, iteration limits). Before this, only the
+        text-response path saved the user message: a run that ended in
+        `error` (e.g. every approval timed out) left the conversation with
+        NO user message at all, so re-entering the conversation showed the
+        message as disappeared.
+        """
+        if self._user_msg_persisted:
+            return
+        if not conversation_id or not self.db:
+            return
+        try:
+            self.db.add_message(
+                conversation_id, "user", self._persist_message or user_message,
+                attachments=self._current_attachments,
+            )
+            self._user_msg_persisted = True
+        except Exception:
+            logger.warning(
+                "Failed to persist user message (conv=%s)", conversation_id,
+                exc_info=True,
+            )
 
     def _maybe_extract_memories(
         self, user_message: str, assistant_response: str, conversation_id: str | None
@@ -1994,10 +2181,12 @@ class AgentOrchestrator:
         # Mounted-folder access: file tools consult their approval callback
         # with the current run_id so "allow"-policy mounts can remember an
         # approval for the rest of this run. Injected here (not at tool
-        # construction) so every run gets a fresh id.
+        # construction) so every run gets a fresh id. The conversation id is
+        # injected too so the callback can enforce conversation scoping.
         if hasattr(tool, "_approval_cb") and tool._approval_cb is not None:
             try:
                 tool._current_run_id = self.current_run_id
+                tool._current_conv_id = getattr(self, "_current_conv_id", None)
             except Exception:
                 pass
 

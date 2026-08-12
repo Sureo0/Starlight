@@ -175,6 +175,13 @@ class SubagentExecutor:
         child._rate_limiter = self._parent._rate_limiter
         child._validator = self._parent._validator
 
+        # Inherit the parent's cancellation manager AND run_id so a user
+        # cancellation reaches the child: without this the child would block
+        # for its full budget (up to 300s) while the parent's cancel signal
+        # goes unobserved.
+        child.cancellation_manager = self._parent.cancellation_manager
+        child_run_id = getattr(self._parent, "current_run_id", None)
+
         # Children run with their own recorder (created by run()); the executor
         # inspects finish_reason to judge success, and the sink persists the
         # child's trace so the delegate result's trace_id resolves in the UI.
@@ -196,7 +203,13 @@ class SubagentExecutor:
         )
 
         try:
-            result = child.run(task)
+            result = child.run(
+                task, run_id=child_run_id,
+                # The child shares the PARENT's cancellation request; on exit
+                # it must not clear it, or the parent would lose a cancel
+                # signal issued while the child was running.
+                clear_cancel_on_finish=False,
+            )
             # run() does NOT return finish_reason; read it from the child's
             # trace recorder (finish_reason lives on the AgentTrace).
             finish_reason = _child_finish_reason(child) or "text_response"

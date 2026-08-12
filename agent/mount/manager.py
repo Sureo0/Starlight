@@ -102,8 +102,12 @@ class MountManager:
                 return f"系统目录不允许挂载: {blocked}"
         return None
 
-    def mount(self, path: str, name: str | None = None, policy: str = "always_ask") -> tuple[dict | None, str | None]:
+    def mount(self, path: str, name: str | None = None, policy: str = "always_ask", conv_id: str | None = None) -> tuple[dict | None, str | None]:
         """Register a folder. Returns (mount_dict, error).
+
+        conv_id: the conversation this mount belongs to. A mount is only
+        visible/usable in its own conversation — switching to another
+        conversation (or a new one) requires mounting again.
 
         policy:
           - "always_ask": the agent asks the human before EVERY access.
@@ -117,9 +121,10 @@ class MountManager:
             return None, err
         resolved = str(Path(path.strip().strip('"').strip("'")).resolve())
         with self._lock:
-            # Duplicate check (same resolved path)
+            # Duplicate check (same resolved path IN THE SAME conversation)
             for m in self._mounts:
-                if Path(m["path"]).resolve() == Path(resolved):
+                if (m.get("conv_id") or "") == (conv_id or "") and \
+                   Path(m["path"]).resolve() == Path(resolved):
                     # Update policy on re-mount
                     if m.get("policy") != policy:
                         m["policy"] = policy
@@ -130,11 +135,12 @@ class MountManager:
                 "name": (name or Path(resolved).name).strip() or "folder",
                 "path": resolved,
                 "policy": policy,
+                "conv_id": conv_id or None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             self._mounts.append(mount)
             self._save()
-            logger.info("Mounted folder: id=%s path=%s policy=%s", mount["id"], resolved, policy)
+            logger.info("Mounted folder: id=%s path=%s policy=%s conv=%s", mount["id"], resolved, policy, conv_id)
             return mount, None
 
     def set_policy(self, mount_id: str, policy: str) -> bool:
@@ -166,9 +172,13 @@ class MountManager:
                     return dict(m)
             return None
 
-    def list(self) -> list[dict]:
+    def list(self, conv_id: str | None = None) -> list[dict]:
+        """List mounts. With conv_id, only mounts belonging to that
+        conversation are returned (mounts are conversation-scoped)."""
         with self._lock:
-            return [dict(m) for m in self._mounts]
+            if conv_id is None:
+                return [dict(m) for m in self._mounts]
+            return [dict(m) for m in self._mounts if (m.get("conv_id") or "") == conv_id]
 
     # ----------------------------------------------------------
     # Path resolution

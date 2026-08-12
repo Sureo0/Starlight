@@ -38,6 +38,7 @@ class LLMResponse:
     usage: dict = field(default_factory=dict)
     raw: dict = field(default_factory=dict)  # Original API response
     mode: str = "native"  # "native" or "prompt" — which calling mode was used
+    reasoning: str = ""  # Model's thinking/reasoning content (e.g. reasoning_content)
 
     @property
     def has_tool_calls(self) -> bool:
@@ -281,6 +282,7 @@ class AgentLLMClient:
                 usage=usage,
                 raw=data,
                 mode="native",
+                reasoning=message.get("reasoning_content") or "",
             )
 
         # 2. Plain text response
@@ -320,6 +322,7 @@ class AgentLLMClient:
             usage=usage,
             raw=data,
             mode=mode,
+            reasoning=message.get("reasoning_content") or "",
         )
 
     # ============================================================
