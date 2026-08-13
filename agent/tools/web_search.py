@@ -12,7 +12,6 @@ import json
 import logging
 import re
 from html import unescape
-from urllib.parse import quote_plus
 
 import requests
 

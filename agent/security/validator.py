@@ -193,19 +193,3 @@ class InputValidator:
 
         return True, "OK"
 
-    def sanitize_for_log(self, text: str, max_length: int = 200) -> str:
-        """
-        Sanitize text for safe logging (no control characters, truncated).
-        """
-        # Remove control characters except newlines and tabs
-        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
-        # Truncate
-        if len(text) > max_length:
-            text = text[:max_length] + "..."
-        return text
-
-    def mask_api_key(self, key: str) -> str:
-        """Mask an API key for safe display."""
-        if not key or len(key) < 8:
-            return "****"
-        return key[:4] + "****" + key[-4:]

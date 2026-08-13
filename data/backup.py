@@ -11,9 +11,6 @@ Can also be imported and called programmatically:
     from backup import run_backup, restore_backup, list_backups
 """
 
-import json
-import os
-import sys
 import zipfile
 import shutil
 import logging

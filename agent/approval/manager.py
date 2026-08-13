@@ -42,16 +42,6 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _parse_ts(ts: str | None) -> float:
-    """Parse an ISO timestamp back to epoch seconds (0 if unparseable)."""
-    if not ts:
-        return 0.0
-    try:
-        return datetime.fromisoformat(ts).timestamp()
-    except Exception:
-        return 0.0
-
-
 @dataclass
 class ApprovalRequest:
     """A single pending/decided approval request."""

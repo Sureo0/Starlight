@@ -221,11 +221,6 @@ class PlanTracker:
                 return i
         return None
 
-    def current_step(self) -> dict | None:
-        idx = self._current_index()
-        if idx is None:
-            return None
-        return self.plan.steps[idx]
 
     def build_progress_injection(self) -> str:
         """

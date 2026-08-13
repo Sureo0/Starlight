@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from agent.orchestrator import AgentConfig, AgentOrchestrator
 from agent.tools.registry import ToolRegistry
 from agent.tools.base import Tool, ToolResult
@@ -366,10 +364,10 @@ def test_charge_subagent_quota_directly(tmp_db):
     agent = AgentOrchestrator(
         llm=ScriptedLLM(), tools=ToolRegistry(), config=AgentConfig(),
     )
-    assert agent._charge_subagent_quota("delegate", {"mode": "research"}, 0) == MODE_QUOTA["research"]
-    assert agent._charge_subagent_quota("delegate", {"mode": "code"}, 0) == MODE_QUOTA["code"]
-    assert agent._charge_subagent_quota("delegate", {"mode": "full"}, 0) == MODE_QUOTA["full"]
+    assert agent._charge_subagent_quota("delegate", {"mode": "research"}) == MODE_QUOTA["research"]
+    assert agent._charge_subagent_quota("delegate", {"mode": "code"}) == MODE_QUOTA["code"]
+    assert agent._charge_subagent_quota("delegate", {"mode": "full"}) == MODE_QUOTA["full"]
     # non-delegate tools charge nothing extra
-    assert agent._charge_subagent_quota("read_file", {}, 0) == 0
+    assert agent._charge_subagent_quota("read_file", {}) == 0
     # missing mode defaults to research
-    assert agent._charge_subagent_quota("delegate", {}, 0) == MODE_QUOTA["research"]
+    assert agent._charge_subagent_quota("delegate", {}) == MODE_QUOTA["research"]

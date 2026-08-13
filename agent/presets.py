@@ -45,7 +45,7 @@ except ImportError:  # pragma: no cover
 from agent.security.sandbox import SandboxConfig
 from agent.security.file_guard import FileGuardConfig
 from agent.security.permissions import ToolPermission, PermissionLevel, ToolCategory
-from agent.security.rate_limiter import RateLimiter, RateLimitConfig
+from agent.security.rate_limiter import RateLimiter
 from agent.memory.service import MemoryService
 
 try:

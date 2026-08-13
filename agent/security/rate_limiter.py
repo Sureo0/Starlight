@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger("agent.security.rate_limiter")
 
@@ -102,27 +102,6 @@ class RateLimiter:
                 # For simplicity, we count calls, not exact tokens
                 # A more precise implementation would store (timestamp, tokens)
 
-    def check_tokens(self, username: str, estimated_tokens: int) -> tuple[bool, str]:
-        """
-        Check if a user has token budget remaining.
-
-        Returns:
-            (allowed, reason)
-        """
-        with self._lock:
-            # Count tokens used in the last hour
-            cutoff = time.time() - 3600
-            recent_tokens = sum(
-                1 for t in self._user_tokens_hour.get(username, [])
-                if t > cutoff
-            ) * 1000  # Rough estimate: 1000 tokens per call
-
-            if recent_tokens + estimated_tokens > self.config.user_max_tokens_per_hour:
-                return False, (
-                    f"Token budget exceeded: ~{recent_tokens} tokens used this hour "
-                    f"(limit: {self.config.user_max_tokens_per_hour})"
-                )
-            return True, "OK"
 
     def acquire_concurrent(self) -> tuple[bool, str]:
         """Try to acquire a concurrent execution slot."""

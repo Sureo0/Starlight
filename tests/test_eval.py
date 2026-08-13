@@ -204,7 +204,6 @@ def test_build_workspace_creates_dirs(tmp_path, monkeypatch):
 
 def test_run_task_passes_on_deterministic_check(tmp_path, monkeypatch):
     """A task that writes hello.txt must pass end-to-end with a fake LLM."""
-    import agent.orchestrator as orch_mod
     from agent.llm_client import LLMResponse
 
     class Scripted:

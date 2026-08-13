@@ -7,7 +7,6 @@ useful for chain-of-thought, summarization, or multi-step reasoning.
 
 from __future__ import annotations
 
-import json
 import logging
 
 from agent.tools.base import Tool, ToolResult

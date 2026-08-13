@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime, timezone
 from pathlib import Path
 
 from agent.observability.trace_recorder import AgentTrace
@@ -179,8 +178,3 @@ class TraceStore:
         with self._lock:
             return len(self._index)
 
-    @staticmethod
-    def default_directory() -> Path:
-        """data/traces next to the app's data dir (callers may override)."""
-        from pathlib import Path as _P
-        return _P(__file__).resolve().parent.parent.parent / "data" / "traces"

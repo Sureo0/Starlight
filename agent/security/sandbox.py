@@ -17,7 +17,6 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 
 logger = logging.getLogger("agent.security.sandbox")
 

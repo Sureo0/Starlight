@@ -17,6 +17,26 @@
     const inputArea = $('#inputArea');
     const chatTitle = $('#chatTitle');
 
+    // ============================================================
+    // Composer state machine: 'empty' (no conversation / New Chat) ⇄
+    // 'normal' (conversation active / message sent). The empty state lifts
+    // the input-area to hug the suggestion chips (margin-top) and grows the
+    // input box to 3× height with the "+" / Send buttons pinned to the
+    // bottom corners; ALL transitions are pure CSS (see .input-area.empty
+    // in style.css, 0.45s cubic-bezier) — JS only flips the class.
+    // ============================================================
+    var composerState = 'normal';
+    function setComposerState(state) {
+        if (state === composerState) return;
+        composerState = state;
+        inputArea.classList.toggle('empty', state === 'empty');
+        // The messages pane collapse (and thus the composer's upward flow)
+        // is driven by .main.empty — see .main.empty .messages in style.css.
+        document.querySelector('.main').classList.toggle('empty', state === 'empty');
+    }
+    function composerEmpty() { setComposerState('empty'); }
+    function composerNormal() { setComposerState('normal'); }
+
     // CSRF token from meta tag
     function getCsrfToken() {
         var meta = document.querySelector('meta[name="csrf-token"]');
@@ -372,19 +392,6 @@
         } catch (e) { /* toast already shown */ }
     }
 
-    async function createConversation() {
-        try {
-            var res = await apiFetch('/api/conversations', { method: 'POST' });
-            if (!res) return;
-            var data = await res.json();
-            currentConvId = data.id;
-            chatTitle.textContent = 'New Chat';
-            renderMessages([]);
-            await loadConversations();
-            closeSidebar();
-        } catch (e) { /* toast already shown */ }
-    }
-
     async function deleteConversation(id) {
         try {
             await apiFetch('/api/conversations/' + id, { method: 'DELETE' });
@@ -439,8 +446,10 @@
             messagesEl.innerHTML = '';
             messagesEl.appendChild(welcomeEl);
             welcomeEl.style.display = 'block';
+            composerEmpty();
             return;
         }
+        composerNormal();
         welcomeEl.style.display = 'none';
         messagesEl.innerHTML = messages.map(m => {
             var body = formatContent(m.content) + attachmentsHtml(m.attachments);
@@ -543,10 +552,6 @@
         body.textContent += chunk;
         scrollToBottom();
     }
-    function appendReasoning(reasoning) {
-        appendReasoningChunk(reasoning);
-    }
-
     // Subtle one-line tool activity marker (streaming execution progress).
     function appendToolActivity(line) {
         var el = document.getElementById('toolActivity');
@@ -751,6 +756,10 @@
         currentRunMode = isTaskMode(text) ? 'task' : 'chat';
         cancelConfirmed = false;
         showCancelBtn();
+        // Send triggers the empty→normal transition (lift drops, box shrinks
+        // back to default, buttons glide from the corners to their inline
+        // spots) — all driven by the .empty class removal + CSS transitions.
+        composerNormal();
 
         appendMessage('user', messageText, attsToSend);
         showTyping();
@@ -764,6 +773,37 @@
         attachBar.style.display = 'none';
 
         try {
+            // If a conversation switch is still in flight (user clicked a
+            // conversation and sent immediately), wait for it to finish —
+            // otherwise currentConvId may not have updated yet and the bind
+            // below would target a wrong (auto-created) conversation.
+            if (_convSwitchPromise) {
+                await _convSwitchPromise;
+                _convSwitchPromise = null;
+            }
+            // Preselected mounts (chosen without a conversation) bind here:
+            // sending a message is an explicit "start chatting" action, so a
+            // conversation is materialized (if needed) and the mounts are
+            // attached to this message. ensureMountsBound is deduped, so a
+            // bind already started by a conversation switch is awaited here
+            // instead of racing it.
+            if (pendingMounts.length > 0) {
+                var boundMounts = await ensureMountsBound();
+                // Merge the auto-used mounts into the outgoing attachments
+                // (attsToSend was captured before the bind happened).
+                (boundMounts || []).forEach(function (m) {
+                    attsToSend.push({ file_id: m.id, name: m.name, size: 0, kind: 'mount', ext: '', url: null });
+                });
+            } else if (_lastBoundMounts && _lastBoundMounts.length > 0) {
+                // A conversation-switch bind already happened while this send
+                // was waiting (pendingMounts is empty now) — attach those
+                // bound mounts so the message still carries the manifests.
+                _lastBoundMounts.forEach(function (m) {
+                    attsToSend.push({ file_id: m.id, name: m.name, size: 0, kind: 'mount', ext: '', url: null });
+                });
+                _lastBoundMounts = [];
+            }
+
             // Fresh run: reset the streaming reasoning block so each message
             // gets its own thinking section (never reuses the previous one).
             activeReasoningEl = null;
@@ -823,6 +863,18 @@
                         // creates it (new conversation, first message).
                         if (ev.conversation_id && !runConvId) {
                             currentConvId = ev.conversation_id;
+                            // Save preselected skills to the new conversation
+                            // (chosen without a conversation; New Chat no
+                            // longer creates a record, so this is the first
+                            // chance to persist them).
+                            if (currentSkills.length > 0) {
+                                var skillsCopy = currentSkills.slice();
+                                apiFetch('/api/conversations/' + currentConvId + '/skills', {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ skills: skillsCopy }),
+                                }).catch(function () { /* no-op */ });
+                            }
                         }
                         continue;
                     }
@@ -1434,9 +1486,22 @@
     wireDragDrop();
     msgInput.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
     msgInput.addEventListener('input', function () { autoResize(msgInput); });
-    // Resolve createConversation at CLICK time so wrapper logic (pending-skill
-    // save etc.) added later still applies.
-    $('#btnNewChat').addEventListener('click', function () { createConversation(); });
+    // "New Chat" enters the initial no-conversation state WITHOUT creating a
+    // conversation record — a record is only created when the user actually
+    // sends a message (sendMessage/ensureMountsBound auto-create it).
+    // Preselected skills/mounts are kept locally (currentSkills/pendingMounts
+    // are NOT cleared) and bind on that first send.
+    $('#btnNewChat').addEventListener('click', function () {
+        currentConvId = null;
+        chatTitle.textContent = 'New Chat';
+        renderMessages([]);
+        // Keep the sidebar conversation list as-is (no record was created);
+        // only clear the composer attachments for the fresh state. Preselected
+        // skills stay visible (renderSkillBar keeps the local selection).
+        purgePendingAttachments();
+        loadMountList();
+        renderSkillBar();
+    });
     $('#btnToggleSidebar').addEventListener('click', function () { $('#sidebar').classList.toggle('open'); });
 
     // User menu
@@ -1703,19 +1768,16 @@
 
     // ============================================================
     // Mounted folders (挂载目录)
+    // Mounts are conversation-scoped: mounting always targets a real
+    // conversation. Without one, the mount flow creates a conversation
+    // first (see doMountWithPolicy). Switching conversations requires
+    // re-mounting.
     // ============================================================
     var mountModal = document.getElementById('mountModal');
     var mountPathInput = document.getElementById('mountPath');
     var mountListEl = document.getElementById('mountList');
 
-    // Pending mounts chosen BEFORE a conversation exists (预选挂载). Once a
-    // new conversation is created they are bound to it automatically (see
-    // createConversation wrapper) — same pattern as pending skills.
-    var pendingMounts = [];  // [{path, policy}]
-
     function openMountModal() {
-        // Mounts may be preselected without a conversation: the modal opens
-        // in "预选" mode and binds to the next created conversation.
         mountModal.classList.add('active');
         loadMountList();
         setTimeout(function () { mountPathInput.focus(); }, 100);
@@ -1724,25 +1786,27 @@
 
     async function loadMountList() {
         if (!mountListEl) return;
+        // Preselected mounts (chosen without a conversation) are only shown
+        // in the initial no-conversation state. Once a conversation is
+        // selected/created, the list shows only that conversation's mounted
+        // folders — preselections stay invisible until they bind (new
+        // conversation or send), so switching conversations never leaks the
+        // preselected folder into another conversation's mount list.
         var html = '';
-        // Pending (preselected) mounts are shown first — they bind to the
-        // next conversation the user creates.
-        if (pendingMounts.length) {
-            pendingMounts.forEach(function (pm, i) {
-                var name = pm.name || (pm.path.split(/[\\\/]/).pop() || pm.path);
-                html +=
-                    '<div class="mount-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px dashed var(--border);border-radius:8px;margin-bottom:6px;background:rgba(99,102,241,0.06);">' +
-                    '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-                    '📁 <b>' + esc(name) + '</b> <span style="color:#94a3b8;font-size:0.8rem;">' + esc(pm.path) + '</span>' +
-                    '<span style="margin-left:6px;font-size:0.7rem;padding:1px 6px;border-radius:6px;background:rgba(99,102,241,0.15);color:#6366f1;">预选·待绑定</span></span>' +
-                    '<button class="btn-sm" style="flex-shrink:0;color:#dc2626;" data-pending="' + i + '">移除</button></div>';
-            });
-        }
         if (!currentConvId) {
-            // No conversation: show pending mounts + a hint. Creating a new
-            // conversation binds the pending ones automatically.
+            if (pendingMounts.length) {
+                pendingMounts.forEach(function (pm, i) {
+                    var name = pm.name || (pm.path.split(/[\\\/]/).pop() || pm.path);
+                    html +=
+                        '<div class="mount-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px dashed var(--border);border-radius:8px;margin-bottom:6px;background:rgba(99,102,241,0.06);">' +
+                        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+                        '📁 <b>' + esc(name) + '</b> <span style="color:#94a3b8;font-size:0.8rem;">' + esc(pm.path) + '</span>' +
+                        '<span style="margin-left:6px;font-size:0.7rem;padding:1px 6px;border-radius:6px;background:rgba(99,102,241,0.15);color:#6366f1;">预选·待绑定</span></span>' +
+                        '<button class="btn-sm" style="flex-shrink:0;color:#dc2626;" data-pending="' + i + '">移除</button></div>';
+                });
+            }
             mountListEl.innerHTML = html ||
-                '<div class="mount-empty" style="color:#94a3b8;font-size:0.85rem;">尚未选择对话 — 挂载的文件夹将作为预选，新建对话后自动绑定</div>';
+                '<div class="mount-empty" style="color:#94a3b8;font-size:0.85rem;">尚未选择对话 — 挂载的文件夹将作为预选，选择或新建对话后自动挂载</div>';
             wirePendingRemove();
             return;
         }
@@ -1843,36 +1907,52 @@
         mountConfirmModal.classList.remove('active');
     }
 
+    // Mount after the permission confirm. With a conversation it goes
+    // straight to it; WITHOUT one the mount is kept as a local PRESELECTION
+    // (no conversation is auto-created — the user may not want a new chat
+    // yet). Preselections bind when the user sends a message (sendMessage /
+    // ensureMountsBound) or a conversation is created via that path.
+    var pendingMounts = [];  // [{path, policy, name}]
+
     function doMountWithPolicy(policy) {
         if (!pendingMountPath) return;
-        // No conversation yet: keep the mount as a PRESELECTION (预选). It is
-        // bound to the conversation the user creates next (see the
-        // createConversation wrapper) — mirroring pending-skill behavior.
+        var path = pendingMountPath;
+        closeMountConfirm();
+        // No conversation: preselect locally — no API call, no auto-created
+        // conversation.
         if (!currentConvId) {
-            pendingMounts.push({ path: pendingMountPath, policy: policy, name: pendingMountPath.split(/[\\\/]/).pop() || pendingMountPath });
-            closeMountConfirm();
+            pendingMounts.push({ path: path, policy: policy, name: path.split(/[\\\/]/).pop() || path });
             mountPathInput.value = '';
             loadMountList();
-            showToast('已预选文件夹，新建对话后将自动挂载', 'success');
+            showToast('已预选文件夹，选择或新建对话后自动挂载', 'success');
             return;
         }
-        apiFetch('/api/mounts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: pendingMountPath, policy: policy, conv_id: currentConvId }),
-        })
-            .then(function (res) { return res ? res.json() : null; })
-            .then(function (data) {
-                closeMountConfirm();
-                if (data && data.ok) {
-                    showToast('已挂载到当前对话: ' + data.mount.name, 'success');
-                    mountPathInput.value = '';
-                    loadMountList();
-                } else {
-                    showToast(data && data.error || '挂载失败');
-                }
-            })
-            .catch(function () { showToast('挂载失败'); });
+        (async function () {
+            var res = await apiFetch('/api/mounts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: path, policy: policy, conv_id: currentConvId }),
+            });
+            if (!res) return;
+            var data = await res.json();
+            if (!data || !data.ok) {
+                showToast(data && data.error || '挂载失败');
+                return;
+            }
+            var mount = data.mount;
+            mountPathInput.value = '';
+            // Auto-use: add to the pending attachments so the next message
+            // carries the folder manifest (the model must see the path).
+            if (pendingAttachments.length < 8) {
+                var att = { file_id: mount.id, name: mount.name, size: 0, kind: 'mount', ext: '', url: null };
+                pendingAttachments.push(att);
+                addAttachmentChip(att);
+            } else {
+                showToast('最多同时使用 8 个附件');
+            }
+            showToast('已挂载到当前对话: ' + mount.name, 'success');
+            loadMountList();
+        })().catch(function () { showToast('挂载失败'); });
     }
 
     document.getElementById('btnDoMount').addEventListener('click', function () {
@@ -2029,7 +2109,8 @@
 
     async function saveSkills() {
         // No conversation yet: keep the selection locally; it is saved once a
-        // conversation is created/selected (see createConversation).
+        // conversation is created on the first send (ensureMountsBound /
+        // stream start event).
         if (!currentConvId) {
             renderSkillBar();
             loadSkillList();
@@ -2069,46 +2150,66 @@
         btnSkillModal.addEventListener('click', function (e) { if (e.target === e.currentTarget) closeSkillModal(); });
     }
 
-    // Pending attachments (files, images, mounts) and skills are
-    // conversation-scoped: switching conversations clears them — they must be
-    // re-selected in the new conversation. Uploaded files stay on the server
-    // (they belong to the conversation they were uploaded in) but leave the
-    // composer.
-    var _origLoadConversation = loadConversation;
-    loadConversation = function (id) {
-        loadSkillsForConv(id);
-        purgePendingAttachments();
-        return _origLoadConversation(id);
-    };
-    var _origCreateConversation = createConversation;
-    createConversation = function () {
-        var hadPendingSkills = currentSkills.length > 0;
-        var pendingSkillsCopy = currentSkills.slice();
-        // Preselected mounts bind to the new conversation (same pattern).
-        var hadPendingMounts = pendingMounts.length > 0;
-        var pendingMountsCopy = pendingMounts.slice();
-        purgePendingAttachments();
-        var p = _origCreateConversation();
-        // Save skills chosen before the conversation existed
-        if (hadPendingSkills) {
-            p.then(function () {
-                currentSkills = pendingSkillsCopy;
-                return saveSkills();
-            }).catch(function () { /* no-op */ });
-        }
-        // Bind preselected mounts to the newly created conversation
-        if (hadPendingMounts) {
-            p.then(function () {
-                return bindPendingMounts(pendingMountsCopy);
-            }).catch(function () { /* no-op */ });
-        }
-        return p;
-    };
+    // Pending attachments (files, images) are conversation-scoped: switching
+    // conversations clears them — they must be re-selected in the new
+    // conversation. Uploaded files stay on the server (they belong to the
+    // conversation they were uploaded in) but leave the composer.
+    // Preselected mounts (chosen without a conversation) bind ONLY when a
+    // NEW conversation is created or a message is sent — switching to an
+    // existing conversation does NOT auto-bind them (see loadConversation
+    // wrapper and ensureMountsBound).
+    var _mountBindPromise = null;  // in-flight bind (dedup)
+    var _lastBoundMounts = [];     // most recent bind result (consumed by send)
 
-    // POST each preselected mount to the new conversation; on success the
-    // preselection is cleared (failures are surfaced per-mount and kept).
+    // Ensure all preselected mounts are bound to the CURRENT conversation
+    // (creating one first if needed). Returns the bound mount objects and
+    // remembers them in _lastBoundMounts so a send that awaited a
+    // conversation-switch bind can still attach them to its message.
+    // Concurrent callers (new-conversation bind + sendMessage) share the same
+    // in-flight promise, so the bind runs exactly once.
+    function ensureMountsBound() {
+        if (pendingMounts.length === 0) return Promise.resolve([]);
+        if (_mountBindPromise) return _mountBindPromise;
+        var copy = pendingMounts.slice();
+        _mountBindPromise = (async function () {
+            if (!currentConvId) {
+                var convRes = await fetch('/api/conversations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+                });
+                if (convRes && convRes.ok) {
+                    var convData = await convRes.json();
+                    currentConvId = convData.id;
+                    chatTitle.textContent = 'New Chat';
+                    // Save preselected skills to the new conversation (they
+                    // were chosen without a conversation; see saveSkills).
+                    if (currentSkills.length > 0) {
+                        var skillsCopy = currentSkills.slice();
+                        apiFetch('/api/conversations/' + currentConvId + '/skills', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ skills: skillsCopy }),
+                        }).catch(function () { /* no-op */ });
+                    }
+                }
+            }
+            var bound = await bindPendingMounts(copy);
+            _lastBoundMounts = bound || [];
+            await loadConversations();
+            return bound;
+        })();
+        // Clear the shared promise when done (success or failure).
+        _mountBindPromise.then(function () { _mountBindPromise = null; },
+                               function () { _mountBindPromise = null; });
+        return _mountBindPromise;
+    }
+
+    // POST each preselected mount to the current conversation; on success the
+    // preselection is cleared and the bound mounts are AUTO-USED (added to
+    // the pending attachments so the next message carries the
+    // [挂载文件夹] manifest). Returns the successfully bound mount objects.
     function bindPendingMounts(mountsCopy) {
-        var results = mountsCopy.map(function () { return false; });  // per-index success
+        var results = mountsCopy.map(function () { return null; });
         var chain = Promise.resolve();
         mountsCopy.forEach(function (pm, idx) {
             chain = chain.then(function () {
@@ -2119,9 +2220,9 @@
                 }).then(function (res) {
                     if (!res) return;
                     return res.json().then(function (data) {
-                        if (data && data.ok) results[idx] = true;
+                        if (data && data.ok) results[idx] = data.mount;
                     });
-                }).catch(function () { /* failed — stays false */ });
+                }).catch(function () { /* failed — stays null */ });
             });
         });
         return chain.then(function () {
@@ -2137,9 +2238,38 @@
                 var failedN = mountsCopy.length - succeeded;
                 showToast('预选挂载部分失败（' + failedN + '/' + mountsCopy.length + '），可重新挂载');
             }
+            // Auto-use the successfully bound mounts.
+            results.forEach(function (m) {
+                if (!m) return;
+                if (pendingAttachments.length >= 8) {
+                    showToast('最多同时使用 8 个附件');
+                    return;
+                }
+                var att = { file_id: m.id, name: m.name, size: 0, kind: 'mount', ext: '', url: null };
+                pendingAttachments.push(att);
+                addAttachmentChip(att);
+            });
             loadMountList();
+            return results.filter(Boolean);
         });
     }
+
+    var _origLoadConversation = loadConversation;
+    var _convSwitchPromise = null;  // in-flight conversation switch (send waits for it)
+    loadConversation = function (id) {
+        loadSkillsForConv(id);
+        purgePendingAttachments();
+        // NOTE: switching to an existing conversation does NOT bind
+        // preselected mounts — preselections stay local and only bind when a
+        // message is sent (sendMessage / ensureMountsBound auto-create the
+        // conversation). This matches the "挂载即生效，不自动挂到别的会话"
+        // rule: mounts belong to the conversation they were made in, and a
+        // preselection made without a conversation must not silently attach
+        // itself to a conversation the user merely opens. The user explicitly
+        // re-mounts (or the preselection binds on send).
+        _convSwitchPromise = _origLoadConversation(id);
+        return _convSwitchPromise;
+    };
 
     function purgePendingAttachments() {
         if (!pendingAttachments.length) return;
@@ -2151,6 +2281,9 @@
     // ============================================================
     // Init
     // ============================================================
+    // No conversation on load: start in the 'empty' composer state (the
+    // welcome screen with suggestion chips is present in the static HTML).
+    composerEmpty();
     checkLogin();
     loadConversations();
     startApprovalPolling();

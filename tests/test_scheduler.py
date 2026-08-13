@@ -13,7 +13,6 @@ Covers:
 from __future__ import annotations
 
 import time
-import uuid
 
 import pytest
 
@@ -25,7 +24,6 @@ from agent.scheduler import (
     RUN_SKIPPED,
 )
 from agent.security.rate_limiter import RateLimiter, RateLimitConfig
-from agent.llm_client import LLMResponse
 
 
 # ============================================================

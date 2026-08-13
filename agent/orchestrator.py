@@ -97,14 +97,13 @@ try:
     from agent.cancellation import (
         CancellationManager, CancellationRequest,
         DIRECT, CONFIRM,
-        PENDING as C_PENDING, APPROVED as C_APPROVED, DENIED as C_DENIED,
         manager as _default_cancel_manager,
     )
     _CANCELLATION_AVAILABLE = True
 except ImportError:  # pragma: no cover
     CancellationManager = None  # type: ignore
     CancellationRequest = None  # type: ignore
-    DIRECT = CONFIRM = C_PENDING = C_APPROVED = C_DENIED = None  # type: ignore
+    DIRECT = CONFIRM = None  # type: ignore
     _default_cancel_manager = None  # type: ignore
     _CANCELLATION_AVAILABLE = False
 
@@ -383,18 +382,6 @@ class AgentOrchestrator:
             raise result_holder["error"]
         return result_holder["response"]
 
-    def _cancel_status(self) -> str | None:
-        """Current cancellation status for this run (for events/traces)."""
-        if not self.config.cancellation_enabled:
-            return None
-        mgr = self.cancellation_manager
-        if mgr is None or self.current_run_id is None:
-            return None
-        try:
-            req = mgr.get(self.current_run_id)
-            return req.status if req else None
-        except Exception:
-            return None
 
     def attach_recorder(self, recorder) -> None:
         """Attach a TraceRecorder to capture this agent's runs (fail-soft)."""
@@ -411,13 +398,6 @@ class AgentOrchestrator:
         except Exception:
             return {}
 
-    def _build_result(self, plan_tracker, **kwargs) -> dict:
-        """Standard result dict with optional plan info."""
-        result = dict(kwargs)
-        plan = self._plan_result_dict(plan_tracker)
-        if plan:
-            result["plan"] = plan
-        return result
 
     def _trace_finish(self, reason: str, detail: str = "", success: bool = False,
                       content: str = "", tool_calls_made: int = 0,
@@ -449,8 +429,7 @@ class AgentOrchestrator:
     # Sub-agent (delegate) support
     # ----------------------------------------------------------
 
-    def _charge_subagent_quota(self, name: str, tool_args: dict,
-                               parent_used: int) -> int:
+    def _charge_subagent_quota(self, name: str, tool_args: dict) -> int:
         """Return the number of additional parent-budget tool calls a delegate
         call should be charged, based on the mode it ran in.
 
@@ -772,8 +751,6 @@ class AgentOrchestrator:
         # run() can attach plan info to the result.
         plan_tracker: PlanTracker | None = None
 
-        def _finish(**kwargs) -> tuple[dict, PlanTracker | None]:
-            return dict(kwargs), plan_tracker
 
         # 1. Build initial messages
         messages = self._build_initial_messages(
@@ -1215,7 +1192,7 @@ class AgentOrchestrator:
                         #  - never cache delegate results (each run is unique)
                         #  - record a subagent summary event in the trace
                         _delegate_quota = self._charge_subagent_quota(
-                            tool_name, tool_args, parent_used=tool_calls_made
+                            tool_name, tool_args
                         )
                         if _delegate_quota:
                             tool_calls_made += _delegate_quota
@@ -1767,7 +1744,7 @@ class AgentOrchestrator:
 
                     # Sub-agent (delegate) support: charge parent quota + trace
                     _delegate_quota = self._charge_subagent_quota(
-                        tool_name, tool_args, parent_used=stream_tool_calls
+                        tool_name, tool_args
                     )
                     if _delegate_quota:
                         stream_tool_calls += _delegate_quota

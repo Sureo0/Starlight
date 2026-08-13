@@ -96,29 +96,6 @@ class ToolPermission:
         self._users[username] = UserPermissions(username=username, level=level)
         logger.info("Registered user permissions: %s (level=%s)", username, level.value)
 
-    def set_level(self, username: str, level: PermissionLevel):
-        """Update a user's permission level."""
-        if username in self._users:
-            self._users[username].level = level
-        else:
-            self.register_user(username, level)
-
-    def allow_tool(self, username: str, tool_name: str):
-        """Explicitly allow a tool for a user (additive)."""
-        if username not in self._users:
-            self.register_user(username)
-        self._users[username].extra_allowed.add(tool_name)
-
-    def deny_tool(self, username: str, tool_name: str):
-        """Explicitly deny a tool for a user (takes priority)."""
-        if username not in self._users:
-            self.register_user(username)
-        self._users[username].denied.add(tool_name)
-
-    def deny_tool_globally(self, tool_name: str):
-        """Deny a tool for all users."""
-        self._global_deny.add(tool_name)
-        logger.info("Globally denied tool: %s", tool_name)
 
     def add_category_override(self, tool_name: str, category: ToolCategory):
         """Register a tool with an explicit category (overrides TOOL_CATEGORIES).
@@ -166,30 +143,3 @@ class ToolPermission:
             f"(level={user_perm.level.value})"
         )
 
-    def get_user_tools(self, username: str, all_tools: list[str]) -> list[str]:
-        """
-        Filter a list of tools to only those the user can access.
-        """
-        allowed = []
-        for tool_name in all_tools:
-            can_use, _ = self.can_use_tool(username, tool_name)
-            if can_use:
-                allowed.append(tool_name)
-        return allowed
-
-    def get_user_info(self, username: str) -> dict:
-        """Get permission info for a user."""
-        user_perm = self._users.get(username)
-        if not user_perm:
-            return {
-                "username": username,
-                "level": "guest",
-                "extra_allowed": [],
-                "denied": [],
-            }
-        return {
-            "username": username,
-            "level": user_perm.level.value,
-            "extra_allowed": sorted(user_perm.extra_allowed),
-            "denied": sorted(user_perm.denied),
-        }

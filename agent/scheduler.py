@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-import uuid
 from datetime import datetime, timezone
 
 logger = logging.getLogger("agent.scheduler")
@@ -58,37 +57,6 @@ class TaskStore:
     # Schema (appended to database._init_schema)
     # --------------------------------------------------------
 
-    @staticmethod
-    def schema_sql() -> str:
-        return """
-            CREATE TABLE IF NOT EXISTS scheduled_tasks (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                name        TEXT    NOT NULL,
-                prompt      TEXT    NOT NULL,
-                schedule    TEXT    NOT NULL,            -- cron expression
-                enabled     INTEGER NOT NULL DEFAULT 1,
-                conversation_id TEXT,
-                last_run_at TEXT,
-                next_run_at TEXT,
-                created_at  TEXT    NOT NULL,
-                updated_at  TEXT    NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS scheduled_task_runs (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id     INTEGER NOT NULL,
-                status      TEXT    NOT NULL,
-                started_at  TEXT    NOT NULL,
-                finished_at TEXT,
-                duration_ms INTEGER,
-                content     TEXT,
-                error       TEXT,
-                trace_id    TEXT,
-                FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_task_runs_task ON scheduled_task_runs(task_id, id DESC);
-        """
 
     # --------------------------------------------------------
     # Tasks CRUD
@@ -353,9 +321,6 @@ class AgentScheduler:
         else:
             self.unschedule_task(task_id)
 
-    def refresh_all(self) -> None:
-        self.unschedule_all()
-        self._reschedule_all()
 
     def unschedule_all(self) -> None:
         with self._lock:

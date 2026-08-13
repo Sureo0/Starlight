@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -230,8 +230,6 @@ class TraceRecorder:
         if model:
             self.trace.model = model
 
-    def report_info(self, detail: str, **extra) -> None:
-        self._safe(self.trace.add, TraceEvent(type="info", detail=detail, **extra))
 
     def report_security(self, detail: str, **extra) -> None:
         self._safe(self.trace.add, TraceEvent(type="security", detail=detail, **extra))

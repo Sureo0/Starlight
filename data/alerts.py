@@ -16,7 +16,6 @@ Usage (standalone):
 
 import json
 import logging
-import os
 import smtplib
 import ssl
 import threading

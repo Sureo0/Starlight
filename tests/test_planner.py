@@ -3,8 +3,6 @@ Tests for the planning module (Plan, PlanTracker, PlanGenerator) and its
 orchestrator integration.
 """
 
-import pytest
-
 from agent.planning.planner import Plan, PlanTracker, PlanGenerator
 
 from conftest import ScriptedLLM

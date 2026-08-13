@@ -232,17 +232,3 @@ class MountManager:
 
 _default_manager: MountManager | None = None
 
-
-def get_mount_manager(data_dir: Path | str | None = None) -> MountManager:
-    """Singleton accessor (the app wires it with its data dir)."""
-    global _default_manager
-    if _default_manager is None:
-        from pathlib import Path as _P
-        dd = _P(data_dir) if data_dir else _P("data")
-        _default_manager = MountManager(dd)
-    return _default_manager
-
-
-def set_mount_manager(manager: MountManager) -> None:
-    global _default_manager
-    _default_manager = manager

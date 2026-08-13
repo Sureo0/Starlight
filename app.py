@@ -10,7 +10,6 @@ import time
 import base64
 import mimetypes
 import hmac
-import hashlib
 import logging
 import threading
 from datetime import datetime, timezone
@@ -31,13 +30,12 @@ from alerts import AlertEngine
 from database import db
 
 # Agent module
-from agent.orchestrator import AgentOrchestrator, AgentConfig
 from agent.presets import create_agent
 from agent.llm_client import AgentLLMClient
 from agent.memory.service import MemoryService
 from agent.observability.storage import TraceStore
 from agent.approval import ApprovalManager, ApprovalStore
-from agent.scheduler import AgentScheduler, TaskStore, RUN_SUCCESS
+from agent.scheduler import AgentScheduler, TaskStore
 from agent.cancellation import manager as cancellation_manager, DIRECT, CONFIRM
 
 
@@ -230,14 +228,12 @@ metrics = Metrics()
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 CONFIG_FILE = DATA_DIR / "config.yaml"
-CONVERSATIONS_DIR = DATA_DIR / "conversations"
 BACKUP_DIR = DATA_DIR / "backups"
 UPLOAD_DIR = DATA_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB per file
 
 DATA_DIR.mkdir(parents=True,exist_ok=True)
-CONVERSATIONS_DIR.mkdir(parents=True,exist_ok=True)
 
 # Alert engine (initialized after metrics)
 alert_engine = AlertEngine(app_metrics=metrics)
@@ -633,7 +629,6 @@ agent = create_agent(
 # reuse `agent` (e.g. /api/agent/chat) get mounted-folder access).
 def _wire_mount(agent_obj):
     try:
-        from agent.mount.manager import MountManager as _MM
         mm = globals().get("mount_manager")
         cb = globals().get("_mount_approval_cb")
         if mm is None or cb is None:

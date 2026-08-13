@@ -15,7 +15,6 @@ leak into another's context.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 logger = logging.getLogger("agent.memory.service")
 

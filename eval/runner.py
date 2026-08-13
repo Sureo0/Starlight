@@ -12,7 +12,6 @@ is attached to the task result so it can be replayed on the /traces page.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import time

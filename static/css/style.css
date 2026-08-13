@@ -186,8 +186,17 @@ body {
 }
 
 /* Messages */
-.messages { flex: 1; overflow-y: auto; padding: 20px; }
-
+/* flex-basis auto (NOT the flex: 1 shorthand's basis 0%) so the pane can
+   collapse to its content height (the welcome block) when the composer is
+   in the empty state — that is what lets the input-area flow right under
+   the suggestion chips instead of hugging the viewport bottom. Normal
+   state: grow 1 fills the available space (content scrolls inside). */
+.messages { flex: 1 1 auto; overflow-y: auto; padding: 20px; transition: flex-grow 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+/* Composer empty state: messages stop growing → the pane takes exactly the
+   welcome block's height, and the input-area (margin-top 24px) sits flush
+   under the suggestion chips. No percentage min/max-height involved —
+   flex-basis auto already IS the content height. */
+.main.empty .messages { flex-grow: 0; }
 .welcome { text-align: center; padding: 80px 20px 40px; color: var(--text-secondary); }
 .welcome h2 { font-size: 1.5rem; color: var(--text); margin-bottom: 8px; }
 .welcome p { font-size: 0.95rem; }
@@ -235,16 +244,30 @@ body {
 @keyframes bounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-4px); } }
 
 /* Input */
-/* Composer: nearly transparent — the backdrop shows through at full
-   strength here (readability of the input area is intentionally secondary
-   to the starfield effect, per design). */
-.input-area { padding: 16px 20px; border-top: 1px solid var(--border); background: rgba(255, 255, 255, 0.12); position: relative; }
-.input-box { display: flex; gap: 8px; max-width: 800px; margin: 0 auto; }
+/* Composer: fully transparent — .main's translucent white is the only
+   layer, so NO color block seam appears at the input-area edge (a second
+   rgba layer would stack and render visibly whiter). No top divider line. */
+.input-area { padding: 16px 20px; background: transparent; position: relative; transition: margin-top 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+/* Composer state machine: empty (no conversation / New Chat) ⇄ normal.
+   EMPTY — the messages pane collapses (.main.empty → flex-grow 0, basis
+   auto = welcome content height), so the input-area flows right below the
+   suggestion chips (24px gap, positive margin — never a negative
+   translateY), and the input box grows to 3× its default height. The
+   button ROW is a separate structural block below the textarea in BOTH
+   states — typed text can never enter the buttons' strip; only its
+   vertical position (margin-top auto) animates with the box height.
+   SEND — class removed: messages pane grows back, margin / box height /
+   paddings transition to the default layout simultaneously
+   (0.45s cubic-bezier). */
+.input-area.empty { margin-top: 24px; }
+.input-box { display: flex; flex-direction: column; gap: 6px; max-width: 800px; margin: 0 auto; position: relative; transition: min-height 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+.input-box { min-height: 42px; }
 
 #msgInput {
-    flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+    flex: 1; width: 100%; padding: 10px 60px; border: 1px solid var(--border); border-radius: 8px;
     font-size: 0.92rem; font-family: inherit; resize: none; outline: none;
     min-height: 42px; max-height: 140px;
+    transition: min-height 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94), padding 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 #msgInput:focus { border-color: var(--primary); }
 
@@ -254,6 +277,25 @@ body {
 }
 .btn-send:hover { background: var(--primary-hover); }
 .btn-send:disabled { background: #94a3b8; cursor: not-allowed; }
+
+/* Composer action strip: an overlay row inside .input-box (the box is
+   position:relative), inset 10px from the box edges so the buttons don't
+   hug the border. NORMAL — pinned to the text line (bottom 2px), the
+   textarea's 60px side padding keeps typed text clear of the buttons: one
+   row total. EMPTY — slides to the box's bottom (bottom 12px), a standalone
+   row inside the 3× tall box with + left / Send right; the textarea's
+   padding-bottom 60px reserves that strip so text can never enter it.
+   Only bottom + padding transition (0.45s). */
+.composer-actions { display: flex; align-items: center; gap: 6px; position: absolute; left: 10px; right: 10px; bottom: 2px; transition: bottom 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+.composer-actions-spacer { flex: 1; }
+
+/* Empty state: taller textarea (3×42=126px); the actions strip sits on the
+   box bottom edge; the textarea starts flush at the box edge (14px
+   padding) with only the bottom 60px reserved for the buttons' strip —
+   typed text hugs the input border. */
+.input-area.empty .input-box { min-height: 126px; }
+.input-area.empty #msgInput { min-height: 126px; padding: 14px 14px 60px; }
+.input-area.empty .composer-actions { bottom: 12px; }
 
 /* Modal */
 .modal-overlay {
@@ -696,8 +738,8 @@ body {
 /* "+" menu: popup above the input box, opened by the + button */
 .plus-menu {
     position: absolute;
-    bottom: 56px;
-    left: 16px;
+    bottom: calc(100% + 6px);
+    left: 0;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;

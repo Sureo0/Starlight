@@ -345,14 +345,6 @@ class AgentLLMClient:
         # Default: try native first
         return "native"
 
-    def set_mode(self, backend_name: str, mode: str):
-        """Explicitly set the calling mode for a backend."""
-        if mode in ("native", "prompt"):
-            self._mode_cache[backend_name] = mode
-
-    def get_mode(self, backend_name: str) -> str:
-        """Get the current effective mode for a backend."""
-        return self._get_mode(backend_name)
 
     # ============================================================
     # Native function calling parser
@@ -553,20 +545,6 @@ class AgentLLMClient:
 
         return calls, clean_content
 
-    def build_tool_call_prompt_addendum(self) -> str:
-        """
-        Generate the full prompt addendum for prompt-based tool calling.
-        Includes both tool descriptions and format instructions.
-        """
-        # This is called without tool schemas — return format-only instructions
-        return self._build_format_instructions()
-
-    def build_full_tool_prompt(self, tools: list[dict]) -> str:
-        """
-        Build the complete tool prompt section (descriptions + format).
-        Used by the orchestrator when injecting into system prompt.
-        """
-        return self._build_tool_descriptions_block(tools) + "\n\n" + self._build_format_instructions()
 
     # ============================================================
     # Tool result formatting for prompt-based mode

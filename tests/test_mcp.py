@@ -237,7 +237,6 @@ def test_readonly_server_maps_to_read_category(stdio_config):
 
 def test_presets_register_mcp_tools(tmp_db, monkeypatch):
     """create_agent with mcp_servers config registers MCP tools + manager."""
-    import yaml
     from agent.presets import create_agent
 
     config = {

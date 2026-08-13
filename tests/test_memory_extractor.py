@@ -2,8 +2,6 @@
 Tests for the automatic memory extractor (agent/memory/extractor.py).
 """
 
-import pytest
-
 from agent.memory.extractor import MemoryExtractor
 from agent.memory.service import MemoryService
 

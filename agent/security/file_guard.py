@@ -171,34 +171,6 @@ class FileGuard:
             )
         return True, None
 
-    def sanitize_filename(self, name: str) -> str:
-        """
-        Sanitize a filename to prevent injection attacks.
-        Removes or replaces dangerous characters.
-        """
-        # Remove path separators
-        name = name.replace("/", "").replace("\\", "")
-        # Remove null bytes
-        name = name.replace("\x00", "")
-        # Remove leading dots (hidden files)
-        name = name.lstrip(".")
-        # Replace spaces with underscores
-        name = name.replace(" ", "_")
-        # Remove other dangerous characters
-        name = "".join(c for c in name if c.isalnum() or c in "._-")
-        # Limit length
-        if len(name) > 255:
-            name = name[:255]
-        return name
-
-    def is_within_workspace(self, path: str | Path) -> bool:
-        """Check if a path is within the workspace directory."""
-        try:
-            resolved = Path(path).resolve()
-            resolved.relative_to(self.workspace)
-            return True
-        except (ValueError, OSError):
-            return False
 
     def get_workspace(self) -> Path:
         """Return the workspace directory path."""

@@ -76,13 +76,6 @@ class ToolRegistry:
         """Return all registered tool instances."""
         return list(self._tools.values())
 
-    def filter_by_names(self, names: Sequence[str]) -> ToolRegistry:
-        """Create a new registry containing only the tools whose names are in the list."""
-        subset = ToolRegistry()
-        for name in names:
-            if name in self._tools:
-                subset.register(self._tools[name])
-        return subset
 
     def __len__(self) -> int:
         return len(self._tools)

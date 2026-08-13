@@ -13,8 +13,6 @@ Covers:
 import threading
 import time
 
-import pytest
-
 from agent.cancellation import (
     CancellationManager, DIRECT, CONFIRM, PENDING, APPROVED, DENIED,
 )

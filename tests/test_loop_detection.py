@@ -166,7 +166,6 @@ def test_empty_arg_write_file_uses_low_threshold(tmp_db):
     from agent.orchestrator import AgentOrchestrator, AgentConfig
     from agent.tools.registry import ToolRegistry
     from agent.tools.base import Tool, ToolResult
-    from agent.llm_client import LLMResponse
     from conftest import ScriptedLLM
 
     class EmptyWrite(Tool):

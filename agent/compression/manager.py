@@ -82,10 +82,6 @@ class CompressionManager:
         """Token level at which compression is triggered."""
         return int(self.budget * self.trigger_ratio)
 
-    @property
-    def target_tokens(self) -> int:
-        """Token level compression brings the history back to."""
-        return max(self.budget - self.reserve, self.keep_recent * 8)
 
     def should_compress(
         self, history: list[dict], prev_summary: str | None = None

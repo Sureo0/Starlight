@@ -16,8 +16,6 @@ import json
 import threading
 import time
 
-import pytest
-
 from agent.approval import (
     ApprovalStore,
     ApprovalManager,
@@ -29,7 +27,6 @@ from agent.approval import (
 from agent.orchestrator import AgentConfig, AgentOrchestrator
 from agent.tools.registry import ToolRegistry
 from agent.tools.base import Tool, ToolResult
-from agent.tools.delegate import SubagentTool
 from agent.llm_client import LLMResponse
 from tests.conftest import ScriptedLLM
 from agent.presets import create_agent

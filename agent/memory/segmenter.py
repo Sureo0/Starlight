@@ -31,11 +31,6 @@ _CJK_RUN_RE = re.compile(r"[一-鿿㐀-䶿豈-﫿]+")
 _LATIN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
-def is_cjk_char(ch: str) -> bool:
-    """Return True if the character is a CJK ideograph."""
-    return bool(_CJK_RE.match(ch))
-
-
 def segment_run(cjk_run: str) -> list[str]:
     """
     Segment a single CJK run into bigram tokens plus the full run.

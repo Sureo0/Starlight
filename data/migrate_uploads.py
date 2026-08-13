@@ -13,7 +13,6 @@ Usage:  python data/migrate_uploads.py   (idempotent — safe to re-run)
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
 
 UPLOADS = Path(__file__).parent / "uploads"
